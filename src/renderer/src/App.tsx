@@ -126,6 +126,9 @@ export default function App(): JSX.Element {
         case 'command-palette':
           st.setCommandPalette(true)
           break
+        case 'open-workspaces':
+          st.setFolderModal(true)
+          break
         default:
           break
       }

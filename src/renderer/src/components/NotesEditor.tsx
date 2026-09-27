@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Idea } from '@shared/types'
 import { buildSelectionPrompt } from '../lib/prompt'
-import { useAppStore } from '../store/appStore'
+import { findSession, useAppStore } from '../store/appStore'
 
 interface MenuState {
   x: number
@@ -85,8 +85,7 @@ function parseHeadings(notes: string): Heading[] {
 }
 
 export default function NotesEditor(): JSX.Element {
-  const sessions = useAppStore((s) => s.sessions)
-  const activeSessionId = useAppStore((s) => s.activeSessionId)
+  const active = useAppStore((s) => findSession(s.sessions, s.activeSessionId))
   const setNotes = useAppStore((s) => s.setNotes)
   const renameSession = useAppStore((s) => s.renameSession)
   const removeIdea = useAppStore((s) => s.removeIdea)
@@ -105,8 +104,6 @@ export default function NotesEditor(): JSX.Element {
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false)
   const [outlineOpen, setOutlineOpen] = useState(false)
   const [savedFlash, setSavedFlash] = useState(false)
-
-  const active = sessions.find((s) => s.id === activeSessionId) ?? null
 
   const headings = useMemo(() => parseHeadings(active?.notes ?? ''), [active?.notes])
   const stats = useMemo(() => {
@@ -297,6 +294,18 @@ export default function NotesEditor(): JSX.Element {
 
   const inlineSuggestion = useAppStore((s) => s.inlineSuggestion)
   const clearInlineSuggestion = useAppStore((s) => s.clearInlineSuggestion)
+
+  // The command palette and the Ctrl+E chord raise a window event rather than
+  // reaching into this component, so both entry points run the same export.
+  const exportRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    exportRef.current = () => {
+      void exportMarkdown()
+    }
+    const onExport = (): void => exportRef.current()
+    window.addEventListener('brainstorm:export', onExport)
+    return () => window.removeEventListener('brainstorm:export', onExport)
+  })
 
   const aiAction = (kind: 'critique' | 'expand'): void => {
     if (!menu?.selection.trim() || !active) return

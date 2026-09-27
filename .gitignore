@@ -4,3 +4,6 @@ release
 dist
 *.log
 .DS_Store
+
+.smoke-profile
+
