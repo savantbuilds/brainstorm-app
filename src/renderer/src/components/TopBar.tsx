@@ -1,20 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
-import { useAppStore } from '../store/appStore'
+import { useAppStore, selectActiveFolder } from '../store/appStore'
 
 export default function TopBar(): JSX.Element {
   const [fileOpen, setFileOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const setFolderModal = useAppStore((s) => s.setFolderModal)
-  const newSession = useAppStore((s) => s.newSession)
   const activeFolderId = useAppStore((s) => s.activeFolderId)
-  const folders = useAppStore((s) => s.folders)
   const aiPanelVisible = useAppStore((s) => s.aiPanelVisible)
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
   const theme = useAppStore((s) => s.settings.theme)
-  const setSettings = useAppStore((s) => s.setSettings)
+  const focusMode = useAppStore((s) => s.settings.focusMode ?? false)
+  const toggleFocusMode = useAppStore((s) => s.toggleFocusMode)
   const setCommandPalette = useAppStore((s) => s.setCommandPalette)
 
-  const activeFolder = folders.find((f) => f.id === activeFolderId) ?? null
+  const activeFolder = useAppStore(selectActiveFolder)
 
   // Close the File menu on any outside click.
   useEffect(() => {
@@ -41,14 +40,14 @@ export default function TopBar(): JSX.Element {
                 setFolderModal(true)
               }}
             >
-              work
+              Workspaces…
             </button>
             <button
               className="topbar-dropdown-item"
               disabled={!activeFolderId}
               onClick={() => {
                 setFileOpen(false)
-                newSession()
+                useAppStore.getState().newSession()
               }}
             >
               New brainstorm
@@ -67,22 +66,37 @@ export default function TopBar(): JSX.Element {
         className="topbar-icon-btn"
         onClick={() => setCommandPalette(true)}
         title="Command palette (Ctrl+Shift+P)"
+        aria-label="Command palette"
       >
         ⌘
       </button>
       <button
-        className="topbar-icon-btn"
-        onClick={() => setSettings({ theme: theme === 'dark' ? 'light' : 'dark' })}
-        title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+        className={`topbar-door${focusMode ? ' open' : ''}`}
+        onClick={toggleFocusMode}
+        title={focusMode ? 'Exit focus mode (Ctrl+Shift+F)' : 'Focus mode (Ctrl+Shift+F)'}
+        aria-label="Toggle focus mode"
+        aria-pressed={focusMode}
       >
-        {theme === 'dark' ? '☀️' : '🌙'}
+        ◎
+      </button>
+      <button
+        className="topbar-icon-btn"
+        onClick={() =>
+          useAppStore.getState().setSettings({ theme: theme === 'dark' ? 'light' : 'dark' })
+        }
+        title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+        aria-label="Toggle theme"
+      >
+        {theme === 'dark' ? '☀' : '☾'}
       </button>
       <button
         className={`topbar-door${aiPanelVisible ? ' open' : ''}`}
         onClick={toggleAiPanel}
-        title={aiPanelVisible ? 'Close AI panel' : 'Open AI panel'}
+        title={aiPanelVisible ? 'Close AI panel (Ctrl+Shift+A)' : 'Open AI panel (Ctrl+Shift+A)'}
+        aria-label="Toggle AI panel"
+        aria-pressed={aiPanelVisible}
       >
-        🚪
+        ⌸
       </button>
     </div>
   )

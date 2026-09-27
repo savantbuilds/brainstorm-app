@@ -72,6 +72,7 @@ export function usePersistence(): { loaded: boolean; flush: () => void } {
 
       useAppStore.getState().setFolders(folderList)
       useAppStore.getState().setSessions(sessionList)
+      useAppStore.setState({ hydrated: true })
       setLoaded(true)
     })
 

@@ -20,19 +20,42 @@ interface Heading {
 
 // A single collapsible idea. Starts collapsed to a one-line preview so long
 // ideas don't dominate the pane; click the header to expand.
-function IdeaCard({ idea, onRemove }: { idea: Idea; onRemove: () => void }): JSX.Element {
+function IdeaCard({
+  idea,
+  onRemove,
+  onPromote
+}: {
+  idea: Idea
+  onRemove: () => void
+  onPromote: () => void
+}): JSX.Element {
   const [collapsed, setCollapsed] = useState(true)
   const firstLine = idea.text.trim().split('\n')[0]
 
   return (
     <div className={`idea-card idea-${idea.source}${collapsed ? ' collapsed' : ''}`}>
       <div className="idea-head" onClick={() => setCollapsed((c) => !c)}>
-        <span className="idea-caret">{collapsed ? '▸' : '▾'}</span>
+        <span className="idea-caret" aria-hidden="true">
+          {collapsed ? '▸' : '▾'}
+        </span>
         <span className="idea-source">{idea.source === 'ai' ? 'AI' : 'Me'}</span>
-        <span className="idea-preview">{firstLine}</span>
+        <span className="idea-preview" title={firstLine}>
+          {firstLine}
+        </span>
+        <button
+          className="idea-promote"
+          title="Move this idea into your notes"
+          onClick={(e) => {
+            e.stopPropagation()
+            onPromote()
+          }}
+        >
+          → Notes
+        </button>
         <button
           className="idea-del"
           title="Remove idea"
+          aria-label="Remove idea"
           onClick={(e) => {
             e.stopPropagation()
             onRemove()
@@ -67,6 +90,7 @@ export default function NotesEditor(): JSX.Element {
   const setNotes = useAppStore((s) => s.setNotes)
   const renameSession = useAppStore((s) => s.renameSession)
   const removeIdea = useAppStore((s) => s.removeIdea)
+  const promoteIdeaToNotes = useAppStore((s) => s.promoteIdeaToNotes)
   const newSession = useAppStore((s) => s.newSession)
   const requestAiAction = useAppStore((s) => s.requestAiAction)
   const startConsolidation = useAppStore((s) => s.startConsolidation)
@@ -625,7 +649,15 @@ export default function NotesEditor(): JSX.Element {
           <div className="ideas-header">Captured ideas ({active.ideas.length})</div>
           <div className="ideas-list">
             {active.ideas.map((idea) => (
-              <IdeaCard key={idea.id} idea={idea} onRemove={() => removeIdea(active.id, idea.id)} />
+              <IdeaCard
+                key={idea.id}
+                idea={idea}
+                onRemove={() => removeIdea(active.id, idea.id)}
+                onPromote={() => {
+                  promoteIdeaToNotes(active.id, idea.id)
+                  setSavedFlash(true)
+                }}
+              />
             ))}
           </div>
         </div>

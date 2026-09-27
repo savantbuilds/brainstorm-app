@@ -77,20 +77,48 @@ function buildAppMenu(win: BrowserWindow): void {
       ]
     },
     {
-      label: 'AI',
-      submenu: [
-        { label: 'Toggle AI Panel', accelerator: 'CmdOrCtrl+Shift+P', click: send('toggle-ai') }
-      ]
-    },
-    {
       label: 'View',
       submenu: [
+        {
+          label: 'Command Palette',
+          accelerator: 'CmdOrCtrl+Shift+P',
+          click: send('command-palette')
+        },
+        { type: 'separator' },
+        {
+          label: 'Toggle AI Panel',
+          accelerator: 'CmdOrCtrl+Shift+A',
+          click: send('toggle-ai')
+        },
+        {
+          label: 'Focus Mode',
+          accelerator: 'CmdOrCtrl+Shift+F',
+          click: send('focus-mode')
+        },
+        {
+          label: 'Toggle Light / Dark Theme',
+          accelerator: 'CmdOrCtrl+Shift+L',
+          click: send('toggle-theme')
+        },
+        { type: 'separator' },
         { role: 'toggleDevTools' },
         { role: 'resetZoom' },
         { role: 'zoomIn' },
         { role: 'zoomOut' },
         { type: 'separator' },
         { role: 'togglefullscreen' }
+      ]
+    },
+    {
+      label: 'Brainstorm',
+      submenu: [
+        { label: 'New Brainstorm', accelerator: 'CmdOrCtrl+N', click: send('new-session') },
+        { type: 'separator' },
+        {
+          label: 'Workspaces…',
+          accelerator: 'CmdOrCtrl+Shift+W',
+          click: send('open-workspaces')
+        }
       ]
     }
   ]

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { BrainstormSession, SessionSort } from '@shared/types'
-import { useAppStore } from '../store/appStore'
+import { selectActiveFolder, useAppStore } from '../store/appStore'
 
 const SORT_LABELS: Record<SessionSort, string> = {
   recent: 'Recently updated',
@@ -42,9 +42,20 @@ export default function SessionList({ width }: { width: number }): JSX.Element {
     return () => window.clearTimeout(timer)
   }, [rawQuery])
 
+  // Search scope: this workspace only, or every workspace. Cross-workspace
+  // search matters once someone has more than a handful of brainstorms and
+  // can't remember which folder they filed something under.
+  const [searchAll, setSearchAll] = useState(false)
+  const folderName = useAppStore((s) => selectActiveFolder(s)?.name ?? 'this workspace')
+  const folderNames = useAppStore((s) => {
+    const map: Record<string, string> = {}
+    for (const f of s.folders) map[f.id] = f.name
+    return map
+  })
+
   const sessions = useMemo(() => {
     const q = query.trim().toLowerCase()
-    const scoped = allSessions.filter((s) => s.folderId === activeFolderId)
+    const scoped = searchAll ? allSessions : allSessions.filter((s) => s.folderId === activeFolderId)
     if (!q) return sortSessions(scoped, sort)
     const matched = scoped.filter((s) => {
       if (s.title.toLowerCase().includes(q)) return true
@@ -52,7 +63,7 @@ export default function SessionList({ width }: { width: number }): JSX.Element {
       return s.ideas.some((i) => i.text.toLowerCase().includes(q))
     })
     return sortSessions(matched, sort)
-  }, [allSessions, activeFolderId, query, sort])
+  }, [allSessions, activeFolderId, query, sort, searchAll])
 
   const cycleSort = (): void => {
     const order: SessionSort[] = ['recent', 'alpha', 'created']
@@ -98,8 +109,24 @@ export default function SessionList({ width }: { width: number }): JSX.Element {
             </button>
           )}
         </div>
-        <button className="sidebar-sort" onClick={cycleSort} title="Change sort order">
+        <button
+          className="sidebar-sort"
+          onClick={cycleSort}
+          title="Change sort order"
+        >
           ⇅ {SORT_LABELS[sort]}
+        </button>
+        <button
+          className={`sidebar-scope${searchAll ? ' on' : ''}`}
+          onClick={() => setSearchAll((v) => !v)}
+          title={
+            searchAll
+              ? 'Searching all workspaces — click to limit to this one'
+              : `Searching ${folderName} — click to search all workspaces`
+          }
+          aria-pressed={searchAll}
+        >
+          {searchAll ? 'All workspaces' : folderName}
         </button>
       </div>
 
@@ -109,44 +136,55 @@ export default function SessionList({ width }: { width: number }): JSX.Element {
             {query ? 'No brainstorms match your search.' : 'No brainstorms yet. Hit ＋ to start.'}
           </div>
         )}
-        {sessions.map((s) => (
-          <div
-            key={s.id}
-            className={`session-row${s.id === activeSessionId ? ' active' : ''}${
-              s.starred ? ' starred' : ''
-            }`}
-            onClick={() => selectSession(s.id)}
-            title={s.title}
-          >
-            <button
-              className={`session-star${s.starred ? ' on' : ''}`}
-              title={s.starred ? 'Unpin' : 'Pin to top'}
-              onClick={(e) => {
-                e.stopPropagation()
-                toggleStarSession(s.id)
+        {sessions.map((s) => {
+          // Only meaningful when results can come from other workspaces.
+          const origin = searchAll ? folderNames[s.folderId] : undefined
+          return (
+            <div
+              key={s.id}
+              className={`session-row${s.id === activeSessionId ? ' active' : ''}${
+                s.starred ? ' starred' : ''
+              }`}
+              onClick={() => {
+                // Jump to the owning workspace so the editor and AI panel line up.
+                if (s.folderId !== activeFolderId) useAppStore.getState().openFolder(s.folderId)
+                selectSession(s.id)
               }}
+              title={s.title}
             >
-              {s.starred ? '★' : '☆'}
-            </button>
-            <div className="session-main">
-              <div className="session-title">{s.title || 'Untitled brainstorm'}</div>
-              <div className="session-meta">
-                {s.ideas.length} idea{s.ideas.length === 1 ? '' : 's'} · {s.messages.length} msg ·{' '}
-                {new Date(s.updatedAt).toLocaleDateString()}
+              <button
+                className={`session-star${s.starred ? ' on' : ''}`}
+                title={s.starred ? 'Unpin' : 'Pin to top'}
+                aria-label={s.starred ? 'Unpin brainstorm' : 'Pin brainstorm to top'}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  toggleStarSession(s.id)
+                }}
+              >
+                {s.starred ? '★' : '☆'}
+              </button>
+              <div className="session-main">
+                <div className="session-title">{s.title || 'Untitled brainstorm'}</div>
+                <div className="session-meta">
+                  {origin && <span className="session-origin">{origin}</span>}
+                  {s.ideas.length} idea{s.ideas.length === 1 ? '' : 's'} · {s.messages.length} msg ·{' '}
+                  {new Date(s.updatedAt).toLocaleDateString()}
+                </div>
               </div>
+              <button
+                className="session-del"
+                title="Delete brainstorm"
+                aria-label="Delete brainstorm"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (window.confirm(`Delete "${s.title || 'Untitled brainstorm'}"?`)) deleteSession(s.id)
+                }}
+              >
+                ×
+              </button>
             </div>
-            <button
-              className="session-del"
-              title="Delete brainstorm"
-              onClick={(e) => {
-                e.stopPropagation()
-                if (window.confirm(`Delete "${s.title || 'Untitled brainstorm'}"?`)) deleteSession(s.id)
-              }}
-            >
-              ×
-            </button>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )

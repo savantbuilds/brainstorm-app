@@ -67,6 +67,8 @@ interface AppState {
   settings: AppSettings
   aiPanelVisible: boolean
   commandPaletteOpen: boolean
+  /** True once the on-disk store has been read into memory. */
+  hydrated: boolean
 
   // --- work folders (workspaces) ---
   setFolders: (folders: WorkFolder[]) => void
@@ -210,6 +212,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   aiPanelVisible: true,
   commandPaletteOpen: false,
+  hydrated: false,
   recoveryRequest: null,
   recovery: null,
   aiActionRequest: null,
