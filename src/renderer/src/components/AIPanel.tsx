@@ -2,43 +2,75 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AIAction } from '@shared/types'
 import SessionChat from './SessionChat'
 import { buildBrainstormPrompt } from '../lib/prompt'
-import { useAppStore } from '../store/appStore'
+import { findSession, useAppStore } from '../store/appStore'
+
+// Each session's panel is a real Chromium <webview> — tens of MB of resident
+// memory apiece. Keeping every session ever visited mounted is what made the
+// app get slower the longer you used it, so only the most recent few stay
+// alive. Older panels are torn down; their conversation is recoverable from the
+// saved URL the moment you return to them.
+const MAX_LIVE_PANELS = 3
 
 const QUICK_ACTIONS: { action: AIAction; label: string; title: string }[] = [
-  { action: 'brainstorm', label: '💡 Brainstorm', title: 'Generate fresh ideas around this topic' },
-  { action: 'expand', label: '➕ Expand notes', title: 'Expand on the most promising directions in your notes' },
-  { action: 'critique', label: '🔍 Critique', title: "Play devil's advocate on your notes" },
-  { action: 'ask', label: '💬 Send notes', title: 'Send your current notes to ChatGPT as context' }
+  { action: 'brainstorm', label: 'Brainstorm', title: 'Generate fresh ideas around this topic' },
+  { action: 'expand', label: 'Expand', title: 'Expand on the most promising directions in your notes' },
+  { action: 'critique', label: 'Critique', title: "Play devil's advocate on your notes" },
+  { action: 'ask', label: 'Send notes', title: 'Send your current notes to ChatGPT as context' }
 ]
 
 export default function AIPanel(): JSX.Element {
   const [toast, setToast] = useState<string | null>(null)
   const [preloadPath, setPreloadPath] = useState<string | null>(null)
-  const [visited, setVisited] = useState<string[]>([])
   const [prompt, setPrompt] = useState('')
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const toastTimer = useRef<number>()
 
-  const sessions = useAppStore((s) => s.sessions)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
   const requestAiAction = useAppStore((s) => s.requestAiAction)
 
-  const active = sessions.find((s) => s.id === activeSessionId) ?? null
+  const active = useAppStore((s) => findSession(s.sessions, s.activeSessionId))
 
   // Resolve absolute preload file URL for webview injection.
   useEffect(() => {
-    window.api.getPreloadPath('chatgpt.js').then(setPreloadPath)
+    let cancelled = false
+    window.api.getPreloadPath('chatgpt.js').then((path) => {
+      if (!cancelled) setPreloadPath(path)
+    })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
-  // Keep every visited session's panel mounted (alive) so switching is instant.
+  // Most-recently-visited session ids, capped. Ids for deleted sessions are
+  // filtered out so a deleted brainstorm can't hold a panel open.
+  const [liveIds, setLiveIds] = useState<string[]>([])
+
   useEffect(() => {
-    if (activeSessionId) {
-      setVisited((v) => (v.includes(activeSessionId) ? v : [...v, activeSessionId]))
-    }
+    if (!activeSessionId) return
+    setLiveIds((prev) => {
+      if (prev[0] === activeSessionId) return prev
+      return [activeSessionId, ...prev.filter((id) => id !== activeSessionId)].slice(0, MAX_LIVE_PANELS)
+    })
   }, [activeSessionId])
+
+  // Drop live panels whose session was deleted.
+  const sessionIds = useAppStore((s) => s.sessions.map((x) => x.id))
+  useEffect(() => {
+    const alive = new Set(sessionIds)
+    setLiveIds((prev) => {
+      const next = prev.filter((id) => alive.has(id))
+      return next.length === prev.length ? prev : next
+    })
+  }, [sessionIds])
 
   const flash = useCallback((msg: string): void => {
     setToast(msg)
-    window.setTimeout(() => setToast(null), 2500)
+    if (toastTimer.current) window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => setToast(null), 2400)
+  }, [])
+
+  useEffect(() => () => {
+    if (toastTimer.current) window.clearTimeout(toastTimer.current)
   }, [])
 
   const sendFreeform = useCallback((): void => {
@@ -52,20 +84,18 @@ export default function AIPanel(): JSX.Element {
   const runQuickAction = useCallback(
     (action: AIAction): void => {
       if (!active) return
-      const built = buildBrainstormPrompt({
-        topic: active.title,
-        notes: active.notes,
-        action
-      })
-      requestAiAction(active.id, built)
+      requestAiAction(
+        active.id,
+        buildBrainstormPrompt({ topic: active.title, notes: active.notes, action })
+      )
       flash(`Sent: ${action}`)
     },
     [active, requestAiAction, flash]
   )
 
-  const existingIds = new Set(sessions.map((s) => s.id))
-  const mountedIds = visited.filter((id) => existingIds.has(id))
-
+  // Rendered in most-recent-first order. Each panel subscribes to its own
+  // session, so editing notes in one session never re-renders this component
+  // or the other panels.
   return (
     <div className="ai-panel">
       <div className="ai-toolbar">
@@ -89,19 +119,16 @@ export default function AIPanel(): JSX.Element {
       )}
 
       <div className="ai-webview-wrap">
-        {preloadPath && mountedIds.length > 0 ? (
-          mountedIds.map((id) => {
-            const s = sessions.find((x) => x.id === id)!
-            return (
-              <SessionChat
-                key={id}
-                session={s}
-                isActive={id === activeSessionId}
-                preloadPath={preloadPath}
-                onToast={flash}
-              />
-            )
-          })
+        {preloadPath && liveIds.length > 0 ? (
+          liveIds.map((id) => (
+            <SessionChat
+              key={id}
+              sessionId={id}
+              isActive={id === activeSessionId}
+              preloadPath={preloadPath}
+              onToast={flash}
+            />
+          ))
         ) : (
           <div className="ai-loading">
             {active ? 'Loading AI panel…' : 'Select or create a brainstorm.'}

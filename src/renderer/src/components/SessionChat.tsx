@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { BrainstormSession } from '@shared/types'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { findSession, useAppStore } from '../store/appStore'
 import { useWebviewBridge } from '../hooks/useWebviewBridge'
-import { useAppStore } from '../store/appStore'
 
 const delay = (ms: number): Promise<void> => new Promise((r) => window.setTimeout(r, ms))
 
 interface Props {
-  session: BrainstormSession
+  /** The panel resolves its own session, so edits elsewhere don't re-render it. */
+  sessionId: string
   isActive: boolean
   preloadPath: string
   onToast: (msg: string) => void
@@ -18,11 +18,12 @@ interface Props {
  * never reloads or loses conversation state. Message/URL capture, recovery, and
  * context-menu actions are all scoped to THIS session.
  */
-export default function SessionChat({ session, isActive, preloadPath, onToast }: Props): JSX.Element {
+function SessionChat({ sessionId, isActive, preloadPath, onToast }: Props): JSX.Element {
+  const session = useAppStore((s) => findSession(s.sessions, sessionId))
   const { webviewRef, isReady, sendOperation, onMessage, onUrl, onAddToNotes, onSaveAsIdea, navigateAndWait } = useWebviewBridge()
 
   // Freeze the initial src so a captured URL change never remounts/reloads it.
-  const [initialSrc] = useState(session.chatUrl ?? 'https://chatgpt.com/')
+  const [initialSrc] = useState(session?.chatUrl ?? 'https://chatgpt.com/')
 
   const recoveringRef = useRef(false)
   const isActiveRef = useRef(isActive)
@@ -33,30 +34,30 @@ export default function SessionChat({ session, isActive, preloadPath, onToast }:
   // Persist this session's conversation URL when it changes.
   useEffect(() => {
     const unsub = onUrl((url) => {
-      if (/\/c\//.test(url)) useAppStore.getState().setChatUrl(session.id, url)
+      if (/\/c\//.test(url)) useAppStore.getState().setChatUrl(sessionId, url)
     })
     return unsub
-  }, [onUrl, session.id])
+  }, [onUrl, sessionId])
 
   // Listen for in-page button clicks directly inside the ChatGPT site
   useEffect(() => {
     const unsubNotes = onAddToNotes((text) => {
       const st = useAppStore.getState()
-      const current = st.sessions.find((s) => s.id === session.id)?.notes || ''
+      const current = st.sessions.find((s) => s.id === sessionId)?.notes || ''
       const next = current ? `${current}\n\n${text}` : text
-      st.setNotes(session.id, next)
+      st.setNotes(sessionId, next)
       flash('Appended raw Markdown from ChatGPT site to notes')
     })
     const unsubIdea = onSaveAsIdea((text) => {
       const st = useAppStore.getState()
-      st.addIdea(session.id, { text, source: 'ai' })
+      st.addIdea(sessionId, { text, source: 'ai' })
       flash('Saved Idea from ChatGPT site')
     })
     return () => {
       unsubNotes()
       unsubIdea()
     }
-  }, [onAddToNotes, onSaveAsIdea, session.id, flash])
+  }, [onAddToNotes, onSaveAsIdea, sessionId, flash])
 
   const pendingActionOriginalTextRef = useRef<string | null>(null)
 
@@ -66,13 +67,13 @@ export default function SessionChat({ session, isActive, preloadPath, onToast }:
     const unsubscribe = onMessage((data) => {
       if (recoveringRef.current) return
       const st = useAppStore.getState()
-      st.addMessage(session.id, { role: 'assistant', content: data.text, timestamp: data.timestamp })
+      st.addMessage(sessionId, { role: 'assistant', content: data.text, timestamp: data.timestamp })
       // A reply to a notes context-menu action is offered as an inline
       // suggestion in the editor rather than just landing in the transcript.
       if (pendingActionOriginalTextRef.current) {
         st.setInlineSuggestion({
           id: `sug_${Date.now()}`,
-          sessionId: session.id,
+          sessionId,
           originalText: pendingActionOriginalTextRef.current,
           suggestedText: data.text,
           timestamp: data.timestamp
@@ -83,12 +84,12 @@ export default function SessionChat({ session, isActive, preloadPath, onToast }:
       if (isActiveRef.current) {
         // Handle consolidation progression
         const cs = st.consolidationState
-        if (cs && cs.active && cs.sessionId === session.id) {
+        if (cs && cs.active && cs.sessionId === sessionId) {
           if (cs.currentChunkIndex < cs.totalChunks - 1) {
             st.advanceConsolidation()
             flash(`Consolidating… part ${cs.currentChunkIndex + 2} of ${cs.totalChunks}`)
           } else {
-            st.setNotes(session.id, data.text)
+            st.setNotes(sessionId, data.text)
             st.cancelConsolidation()
             flash('Notes consolidated')
           }
@@ -96,7 +97,7 @@ export default function SessionChat({ session, isActive, preloadPath, onToast }:
       }
     })
     return unsubscribe
-  }, [onMessage, session.id, flash])
+  }, [onMessage, sessionId, flash])
 
   // Send a prompt to this session and record our side of the turn.
   const sendPrompt = useCallback(
@@ -106,13 +107,13 @@ export default function SessionChat({ session, isActive, preloadPath, onToast }:
         return
       }
       sendOperation(JSON.stringify({ type: 'fillAndSubmit', text: prompt, delayMs: 800 }))
-      useAppStore.getState().addMessage(session.id, {
+      useAppStore.getState().addMessage(sessionId, {
         role: 'user',
         content: prompt,
         timestamp: Date.now()
       })
     },
-    [isReady, sendOperation, session.id, flash]
+    [isReady, sendOperation, sessionId, flash]
   )
 
   // Resolves when the next settled reply arrives — gates recovery chunks.
@@ -136,7 +137,7 @@ export default function SessionChat({ session, isActive, preloadPath, onToast }:
     async (chunks: string[]): Promise<void> => {
       if (chunks.length === 0) return
       recoveringRef.current = true
-      useAppStore.getState().setRecovery({ sessionId: session.id, total: chunks.length, sent: 0 })
+      useAppStore.getState().setRecovery({ sessionId, total: chunks.length, sent: 0 })
       flash('Recovering conversation…')
       try {
         await navigateAndWait('https://chatgpt.com/') // fresh chat — no cross-convo overlap
@@ -144,7 +145,7 @@ export default function SessionChat({ session, isActive, preloadPath, onToast }:
         for (let i = 0; i < chunks.length; i++) {
           const replyDone = waitForReply()
           sendOperation(JSON.stringify({ type: 'fillAndSubmit', text: chunks[i], delayMs: 900 }))
-          useAppStore.getState().setRecovery({ sessionId: session.id, total: chunks.length, sent: i + 1 })
+          useAppStore.getState().setRecovery({ sessionId, total: chunks.length, sent: i + 1 })
           await replyDone // only advance once the AI has finished
         }
         flash('Conversation recovered')
@@ -156,14 +157,14 @@ export default function SessionChat({ session, isActive, preloadPath, onToast }:
         useAppStore.getState().setRecovery(null)
       }
     },
-    [navigateAndWait, sendOperation, waitForReply, flash, session.id]
+    [navigateAndWait, sendOperation, waitForReply, flash, sessionId]
   )
 
   // Pick up recovery requests targeting this session.
   const recoveryRequest = useAppStore((s) => s.recoveryRequest)
   const handledRecovery = useRef<number | null>(null)
   useEffect(() => {
-    if (!recoveryRequest || recoveryRequest.sessionId !== session.id) return
+    if (!recoveryRequest || recoveryRequest.sessionId !== sessionId) return
     if (recoveringRef.current || handledRecovery.current === recoveryRequest.nonce) return
     handledRecovery.current = recoveryRequest.nonce
     const { chunks } = recoveryRequest
@@ -176,7 +177,7 @@ export default function SessionChat({ session, isActive, preloadPath, onToast }:
   const aiActionRequest = useAppStore((s) => s.aiActionRequest)
   const handledAction = useRef<number | null>(null)
   useEffect(() => {
-    if (!aiActionRequest || aiActionRequest.sessionId !== session.id) return
+    if (!aiActionRequest || aiActionRequest.sessionId !== sessionId) return
     if (handledAction.current === aiActionRequest.nonce) return
     handledAction.current = aiActionRequest.nonce
     const { prompt, originalText } = aiActionRequest as typeof aiActionRequest & { originalText?: string }
@@ -188,7 +189,7 @@ export default function SessionChat({ session, isActive, preloadPath, onToast }:
 
   return (
     <webview
-      key={`${session.id}:${preloadPath}`}
+      key={`${sessionId}:${preloadPath}`}
       ref={webviewRef as never}
       src={initialSrc}
       preload={preloadPath}
@@ -205,3 +206,7 @@ export default function SessionChat({ session, isActive, preloadPath, onToast }:
     />
   )
 }
+
+// Memoised: the parent re-renders on panel bookkeeping (which ids are live), and
+// without this every sibling panel would re-render with it.
+export default memo(SessionChat)

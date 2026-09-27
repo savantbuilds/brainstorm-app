@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { BrainstormSession, SessionSort } from '@shared/types'
 import { useAppStore } from '../store/appStore'
 
@@ -31,19 +31,26 @@ export default function SessionList({ width }: { width: number }): JSX.Element {
   const sort = useAppStore((s) => s.settings.sessionSort ?? 'recent')
   const setSettings = useAppStore((s) => s.setSettings)
 
+  const [rawQuery, setRawQuery] = useState('')
+
+  // Debounced mirror of the query. Without this every keystroke re-lowercases
+  // and scans every note body and idea in the folder, which is O(total text)
+  // per character on a large workspace.
   const [query, setQuery] = useState('')
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQuery(rawQuery), 120)
+    return () => window.clearTimeout(timer)
+  }, [rawQuery])
 
   const sessions = useMemo(() => {
     const q = query.trim().toLowerCase()
     const scoped = allSessions.filter((s) => s.folderId === activeFolderId)
-    const matched = q
-      ? scoped.filter(
-          (s) =>
-            s.title.toLowerCase().includes(q) ||
-            s.notes.toLowerCase().includes(q) ||
-            s.ideas.some((i) => i.text.toLowerCase().includes(q))
-        )
-      : scoped
+    if (!q) return sortSessions(scoped, sort)
+    const matched = scoped.filter((s) => {
+      if (s.title.toLowerCase().includes(q)) return true
+      if (s.notes.toLowerCase().includes(q)) return true
+      return s.ideas.some((i) => i.text.toLowerCase().includes(q))
+    })
     return sortSessions(matched, sort)
   }, [allSessions, activeFolderId, query, sort])
 
@@ -81,12 +88,12 @@ export default function SessionList({ width }: { width: number }): JSX.Element {
           </span>
           <input
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => setRawQuery(e.target.value)}
             placeholder="Search brainstorms…"
             spellCheck={false}
           />
-          {query && (
-            <button className="sidebar-search-clear" onClick={() => setQuery('')} title="Clear">
+          {rawQuery && (
+            <button className="sidebar-search-clear" onClick={() => { setRawQuery(''); setQuery('') }} title="Clear">
               ×
             </button>
           )}

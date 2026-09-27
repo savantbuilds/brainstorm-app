@@ -1,6 +1,22 @@
 import { ipcRenderer } from 'electron'
 import type { CodeBlock, InboundPayload } from '@shared/types'
 
+// Selector discovery and DOM injection are chatty while they work. These run
+// inside the guest page on every operation, so the trace is off unless it's
+// explicitly asked for — set `localStorage.brainstormDebug = '1'` in the guest
+// (or launch with --enable-logging) when diagnosing a selector break.
+const DEBUG = (() => {
+  try {
+    return new URLSearchParams(location.search).has('debug') || localStorage.getItem('brainstormDebug') === '1'
+  } catch {
+    return false
+  }
+})()
+
+function debug(...args: unknown[]): void {
+  if (DEBUG) console.log('[ChatGPT Bridge]', ...args)
+}
+
 // DOM Selectors for ChatGPT interface (current as of 2024-2025)
 // Multiple fallback selectors for each element type
 const SELECTORS = {
@@ -43,15 +59,15 @@ function querySelectorWithFallback(selectors: string | string[]): Element | null
     try {
       const el = document.querySelector(selector)
       if (el) {
-        console.log(`[ChatGPT Bridge] Found element with selector: ${selector}`)
+        debug(`[ChatGPT Bridge] Found element with selector: ${selector}`)
         return el
       }
     } catch (e) {
-      console.warn(`[ChatGPT Bridge] Invalid selector: ${selector}`, e)
+      debug(`[ChatGPT Bridge] Invalid selector: ${selector}`, e)
     }
   }
 
-  console.warn(`[ChatGPT Bridge] No element found for any selector:`, selectorList)
+  debug(`[ChatGPT Bridge] No element found for any selector:`, selectorList)
   return null
 }
 
@@ -75,44 +91,33 @@ async function findElement(
  * Fill contenteditable input with proper React state triggering
  */
 async function fillContenteditableInput(text: string): Promise<boolean> {
-  console.log('[ChatGPT Bridge] fillContenteditableInput called, looking for input with selector:', SELECTORS.input)
-
-  const input = await findElement(SELECTORS.input as unknown as string) as HTMLElement
+  const input = (await findElement(SELECTORS.input)) as HTMLElement | null
   if (!input) {
-    console.error('[ChatGPT Bridge] Input element not found with selector:', SELECTORS.input)
-    // Log available elements for debugging
-    const allInputs = document.querySelectorAll('div[contenteditable]')
-    console.log('[ChatGPT Bridge] Available contenteditable elements:', allInputs.length)
-    allInputs.forEach((el, i) => {
-      console.log(`[ChatGPT Bridge]   [${i}]`, el.tagName, el.className, el.id)
-    })
+    console.error('[ChatGPT Bridge] Prompt input not found — the composer selector list needs updating')
     return false
   }
 
-  console.log('[ChatGPT Bridge] Found input element:', input.tagName, input.className)
-
   // Focus the element
   input.focus()
-  console.log('[ChatGPT Bridge] Focused input')
 
   // Clear existing content
   input.textContent = ''
   input.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true }))
-  console.log('[ChatGPT Bridge] Cleared input content')
+  debug('Cleared input content')
 
   // Use execCommand to insert text - this properly triggers React's onChange
-  console.log('[ChatGPT Bridge] Attempting execCommand insertText...')
+  debug('Attempting execCommand insertText...')
   const success = document.execCommand('insertText', false, text)
-  console.log('[ChatGPT Bridge] execCommand result:', success)
+  debug('execCommand result:', success)
 
   if (!success) {
     // Fallback: directly set textContent and dispatch events
-    console.log('[ChatGPT Bridge] Falling back to textContent')
+    debug('Falling back to textContent')
     input.textContent = text
   }
 
   // Dispatch comprehensive event sequence to trigger React state updates
-  console.log('[ChatGPT Bridge] Dispatching events...')
+  debug('Dispatching events...')
   const events = [
     new InputEvent('input', { bubbles: true, cancelable: true, data: text }),
     new Event('input', { bubbles: true, cancelable: true }),
@@ -124,7 +129,7 @@ async function fillContenteditableInput(text: string): Promise<boolean> {
 
   // Trigger a focus event again to ensure state updates
   input.focus()
-  console.log('[ChatGPT Bridge] fillContenteditableInput completed successfully')
+  debug('fillContenteditableInput completed successfully')
 
   return true
 }
@@ -178,26 +183,17 @@ async function clickNewChatButton(): Promise<boolean> {
  * Fill input and submit with delay
  */
 async function fillAndSubmit(text: string, delayMs = 500): Promise<boolean> {
-  console.log('[ChatGPT Bridge] fillAndSubmit called with text length:', text.length)
-
   try {
-    console.log('[ChatGPT Bridge] Calling fillContenteditableInput...')
     const fillSuccess = await fillContenteditableInput(text)
-    console.log('[ChatGPT Bridge] fillContenteditableInput returned:', fillSuccess)
-
     if (!fillSuccess) {
-      console.error('[ChatGPT Bridge] fillContenteditableInput failed')
+      console.error('[ChatGPT Bridge] fillAndSubmit: could not fill the composer')
       return false
     }
 
     // Wait for React state to update and button to become enabled
-    console.log('[ChatGPT Bridge] Waiting', delayMs, 'ms for React state update...')
     await new Promise(resolve => setTimeout(resolve, delayMs))
 
-    console.log('[ChatGPT Bridge] Calling clickSendButton...')
     const clickSuccess = await clickSendButton()
-    console.log('[ChatGPT Bridge] clickSendButton returned:', clickSuccess)
-
     return clickSuccess
   } catch (err) {
     console.error('[ChatGPT Bridge] fillAndSubmit caught error:', err)
@@ -441,18 +437,29 @@ function emitSettledReply(): void {
 }
 
 function onPossibleReplyChange(): void {
-  injectInPageActionButtons()
-
   if (!awaitingReply) return
   const messages = assistantMessages()
   if (messages.length <= baselineAssistantCount) return
   const el = messages[messages.length - 1]
   const text = elementToMarkdown(el)
-  if (text === text && text !== lastSeenText) {
+  if (text && text !== lastSeenText) {
     lastSeenText = text
     if (settleTimer) clearTimeout(settleTimer)
     settleTimer = setTimeout(emitSettledReply, 1200)
   }
+}
+
+// Re-injecting the in-page action bar walks the whole message list, so it is
+// throttled to one pass per animation frame instead of running on every
+// mutation — streaming a reply produces thousands of mutations per second.
+let buttonInjectQueued = false
+function scheduleButtonInject(): void {
+  if (buttonInjectQueued) return
+  buttonInjectQueued = true
+  requestAnimationFrame(() => {
+    buttonInjectQueued = false
+    injectInPageActionButtons()
+  })
 }
 
 /**
@@ -462,20 +469,38 @@ function startMessageObserver(): void {
   const observer = new MutationObserver(() => onPossibleReplyChange())
   observer.observe(document.body, { childList: true, subtree: true, characterData: true })
   injectInPageActionButtons()
-  setInterval(injectInPageActionButtons, 1000)
+  // The bar is removed whenever the transcript re-renders; re-check periodically
+  // so it reappears, but at a rate that can't compete with the observer.
+  setInterval(scheduleButtonInject, 2000)
 }
 
 // --- Conversation URL tracking --------------------------------------------
 //
 // ChatGPT is a single-page app: each conversation has its own /c/<id> URL that
-// the host stores per session, so a session can be reopened and continued. We
-// poll because SPA navigations don't fire a page load.
+// the host stores per session, so a session can be reopened and continued. SPA
+// navigations don't fire a page load, so we hook the History API instead of
+// polling the location on a timer.
 let lastReportedUrl = ''
 function reportUrl(): void {
   const href = location.href
   if (href !== lastReportedUrl) {
     lastReportedUrl = href
     ipcRenderer.sendToHost('dom-bridge:url', href)
+  }
+}
+
+function watchForSpaNavigation(): void {
+  const notify = (): void => reportUrl()
+  window.addEventListener('popstate', notify)
+  window.addEventListener('hashchange', notify)
+
+  // pushState/replaceState are not observable via events, so wrap them.
+  for (const method of ['pushState', 'replaceState'] as const) {
+    const original = history[method]
+    history[method] = function patched(this: History, ...args: Parameters<History['pushState']>): void {
+      original.apply(this, args)
+      notify()
+    }
   }
 }
 
@@ -489,12 +514,12 @@ interface OperationPayload {
 }
 
 async function handleOperation(_event: Electron.IpcRendererEvent, payload: string): Promise<void> {
-  console.log('[ChatGPT Bridge] Received operation:', payload)
   try {
     const operation: OperationPayload = JSON.parse(payload)
     let success = false
     let errorMessage = ''
-    console.log('[ChatGPT Bridge] Parsed operation:', operation.type)
+
+    debug('operation', operation.type)
 
     switch (operation.type) {
       case 'fillInput':
@@ -567,7 +592,7 @@ ipcRenderer.on('dom-bridge:op', handleOperation)
 
 // Also listen for ping to verify connection
 ipcRenderer.on('dom-bridge:ping', () => {
-  console.log('[ChatGPT Bridge] Received ping, sending pong')
+  debug('Received ping, sending pong')
   ipcRenderer.sendToHost('dom-bridge:pong', {})
 })
 
@@ -578,13 +603,12 @@ if (document.readyState === 'loading') {
   startMessageObserver()
 }
 
-// Report the current conversation URL to the host, then keep watching for SPA
-// navigations (new chat, switching conversations).
+// Report the current conversation URL to the host, then watch for SPA
+// navigations (new chat, switching conversations) so no polling is needed.
 reportUrl()
-setInterval(reportUrl, 1500)
+watchForSpaNavigation()
 
 // Signal to the renderer that the preload is ready
-console.log('[ChatGPT Bridge] Preload script loaded, sending ready signal')
 ipcRenderer.sendToHost('dom-bridge:ready', {})
 
 // Export for potential external use

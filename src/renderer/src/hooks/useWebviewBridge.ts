@@ -1,12 +1,48 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DomBridgeConfig, InboundPayload } from '@shared/types'
 
-// Loosely typed webview element interface for renderer execution without ambient Node types
-export type WebviewElement = HTMLElement & {
+// The `ipc-message` event Electron raises on a <webview> when the guest calls
+// ipcRenderer.sendToHost(). Declared here so the bridge handlers stay typed
+// instead of falling back to `any`.
+export interface WebviewIpcMessageEvent extends Event {
+  channel: string
+  args: unknown[]
+}
+
+// Loosely typed webview element interface for renderer execution without
+// ambient Node types. Custom events (`ipc-message`) are declared on the element
+// itself so the add/removeEventListener pair stays type-checked.
+export interface WebviewEventMap extends HTMLElementEventMap {
+  'ipc-message': WebviewIpcMessageEvent
+}
+
+export type WebviewElement = Omit<HTMLElement, 'addEventListener' | 'removeEventListener'> & {
   send: (channel: string, ...args: unknown[]) => void
   reload: () => void
   loadURL: (url: string) => Promise<void>
   getURL: () => string
+  isReady?: () => boolean
+  executeJavaScript?: (code: string) => Promise<unknown>
+  addEventListener<K extends keyof WebviewEventMap>(
+    type: K,
+    listener: (this: WebviewElement, ev: WebviewEventMap[K]) => void,
+    options?: boolean | AddEventListenerOptions
+  ): void
+  addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions
+  ): void
+  removeEventListener<K extends keyof WebviewEventMap>(
+    type: K,
+    listener: (this: WebviewElement, ev: WebviewEventMap[K]) => void,
+    options?: boolean | EventListenerOptions
+  ): void
+  removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | EventListenerOptions
+  ): void
 }
 
 export interface UseWebviewBridgeResult {
@@ -41,59 +77,50 @@ export function useWebviewBridge(_config?: DomBridgeConfig): UseWebviewBridgeRes
   const addToNotesListenersRef = useRef<Set<(text: string) => void>>(new Set())
   const saveAsIdeaListenersRef = useRef<Set<(text: string) => void>>(new Set())
 
-  // Ref callback to capture <webview> DOM element attachment
+  // Ref callback to capture the <webview> DOM element on attach.
   const webviewRef = useCallback((node: WebviewElement | null) => {
-    console.log('[useWebviewBridge] webviewRef callback called with node:', node)
     if (node) {
-      // Check if webview is already ready (isReady() method exists on webview element)
+      // The element can already be ready when the ref fires (e.g. a StrictMode
+      // remount), so check before waiting for dom-ready to fire again.
       try {
-        // @ts-expect-error - isReady exists on webview
-        const alreadyReady = typeof node.isReady === 'function' ? node.isReady() : false
-        if (alreadyReady) {
-          console.log('[useWebviewBridge] Webview is already ready, setting isReady to true')
-          setIsReady(true)
-        }
-      } catch (e) {
-        console.warn('[useWebviewBridge] Error checking isReady:', e)
+        if (typeof node.isReady === 'function' && node.isReady()) setIsReady(true)
+      } catch {
+        // Treat an unavailable isReady() as "not ready yet".
       }
     }
     setWebviewNode(node)
   }, [])
 
-  // Event handler processing `ipc-message` host events emitted by webview `ipcRenderer.sendToHost()`
+  // Handles `ipc-message`, raised by the guest's ipcRenderer.sendToHost().
   useEffect(() => {
-    if (!webviewNode) {
-      console.log('[useWebviewBridge] No webview node yet, skipping event listener setup')
-      return
-    }
+    if (!webviewNode) return
 
-    console.log('[useWebviewBridge] Setting up event listeners on webview')
-
-    // Reset isReady when webview changes
     setIsReady(false)
 
     const handleDomReady = (): void => {
-      console.log('[useWebviewBridge] Webview dom-ready fired')
       setIsReady(true)
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handleIpcMessage = (event: any): void => {
-      console.log('[useWebviewBridge] Received ipc-message:', event.channel, event.args)
-      if (event.channel === 'dom-bridge:message') {
-        const payload: InboundPayload = event.args[0]
-        messageListenersRef.current.forEach((cb) => cb(payload))
-      } else if (event.channel === 'dom-bridge:url') {
-        const url: string = event.args[0]
-        urlListenersRef.current.forEach((cb) => cb(url))
-      } else if (event.channel === 'dom-bridge:add-to-notes') {
-        const text: string = event.args[0]
-        addToNotesListenersRef.current.forEach((cb) => cb(text))
-      } else if (event.channel === 'dom-bridge:save-as-idea') {
-        const text: string = event.args[0]
-        saveAsIdeaListenersRef.current.forEach((cb) => cb(text))
-      } else if (event.channel === 'dom-bridge:error') {
-        console.warn('[useWebviewBridge] Received error from webview bridge:', event.args[0])
+    const handleIpcMessage = (event: WebviewIpcMessageEvent): void => {
+      const payload = event.args[0]
+      switch (event.channel) {
+        case 'dom-bridge:message':
+          messageListenersRef.current.forEach((cb) => cb(payload as InboundPayload))
+          break
+        case 'dom-bridge:url':
+          urlListenersRef.current.forEach((cb) => cb(payload as string))
+          break
+        case 'dom-bridge:add-to-notes':
+          addToNotesListenersRef.current.forEach((cb) => cb(payload as string))
+          break
+        case 'dom-bridge:save-as-idea':
+          saveAsIdeaListenersRef.current.forEach((cb) => cb(payload as string))
+          break
+        case 'dom-bridge:error':
+          console.warn('[useWebviewBridge] Bridge error:', payload)
+          break
+        default:
+          break
       }
     }
 
@@ -101,51 +128,48 @@ export function useWebviewBridge(_config?: DomBridgeConfig): UseWebviewBridgeRes
     webviewNode.addEventListener('ipc-message', handleIpcMessage)
 
     return () => {
-      console.log('[useWebviewBridge] Cleaning up event listeners')
       webviewNode.removeEventListener('dom-ready', handleDomReady)
       webviewNode.removeEventListener('ipc-message', handleIpcMessage)
     }
   }, [webviewNode])
 
   /**
-   * Transmits outbound command payload to guest webview via webview.send()
-   * Falls back to executeJavaScript if send() fails (electron quirk)
+   * Transmits an outbound command payload to the guest webview.
+   *
+   * `webview.send()` is the supported path. The executeJavaScript fallback
+   * dispatches through the guest's own `ipcRenderer`; the payload is passed as
+   * a JSON literal argument rather than interpolated into the script body, so a
+   * prompt containing quotes, newlines or backticks can't break out of it.
    */
-  const sendOperation = useCallback((payload: string): void => {
-    if (!isReady) {
-      console.warn('[useWebviewBridge] Cannot send operation: webview not ready yet.')
-      return
-    }
-    if (!webviewNode) {
-      console.warn('[useWebviewBridge] Cannot send operation: webview ref not attached.')
-      return
-    }
+  const sendOperation = useCallback(
+    (payload: string): void => {
+      if (!webviewNode) {
+        console.warn('[useWebviewBridge] Cannot send operation: webview ref not attached.')
+        return
+      }
 
-    console.log('[useWebviewBridge] Attempting to send operation:', payload)
+      try {
+        webviewNode.send('dom-bridge:op', payload)
+        return
+      } catch (err) {
+        console.warn('[useWebviewBridge] webview.send() failed, falling back:', err)
+      }
 
-    // Method 1: Try webview.send() - this works in some Electron versions
-    try {
-      webviewNode.send('dom-bridge:op', payload)
-      console.log('[useWebviewBridge] Sent via webview.send()')
-      return
-    } catch (err) {
-      console.warn('[useWebviewBridge] webview.send() failed:', err)
-    }
+      if (!isReady) {
+        console.warn('[useWebviewBridge] Cannot send operation: webview not ready yet.')
+        return
+      }
 
-    // Method 2: Try executeJavaScript to trigger IPC from within webview context
-    try {
-      // @ts-expect-error - executeJavaScript exists on webview element
-      webviewNode.executeJavaScript(`
-        if (typeof require !== 'undefined') {
-          const { ipcRenderer } = require('electron');
-          ipcRenderer.emit('dom-bridge:op', null, '${payload.replace(/'/g, "\\'")}');
-        }
-      `)
-      console.log('[useWebviewBridge] Sent via executeJavaScript')
-    } catch (err) {
-      console.error('[useWebviewBridge] All send methods failed:', err)
-    }
-  }, [isReady, webviewNode])
+      try {
+        webviewNode.executeJavaScript?.(
+          `require('electron').ipcRenderer.emit('dom-bridge:op', null, ${JSON.stringify(payload)})`
+        )
+      } catch (err) {
+        console.error('[useWebviewBridge] All send methods failed:', err)
+      }
+    },
+    [isReady, webviewNode]
+  )
 
   /**
    * Registers callback for inbound DOM observation payloads emitted by guest webview

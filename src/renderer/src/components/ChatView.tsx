@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { useAppStore } from '../store/appStore'
+import { findSession, useAppStore } from '../store/appStore'
+import type { ChatMessage } from '@shared/types'
 import {
   buildRecoveryChunks,
   buildRecoveryTranscript,
@@ -9,40 +10,64 @@ import {
   wordCount
 } from '../lib/recovery'
 
+// A saved transcript can run to tens of thousands of words, and rebuilding the
+// recovery text to measure it is expensive enough to be worth memoising against
+// the message list rather than redoing it on every render.
+function useRecoveryInfo(messages: ChatMessage[]): {
+  words: number
+  chunked: boolean
+  chunks: string[]
+} {
+  return useMemo(() => {
+    if (messages.length === 0) return { words: 0, chunked: false, chunks: [] }
+    const words = wordCount(buildRecoveryTranscript(messages))
+    return {
+      words,
+      chunked: words >= RECOVERY_WORD_THRESHOLD,
+      chunks: buildRecoveryChunks(messages)
+    }
+  }, [messages])
+}
+
+const EMPTY_MESSAGES: never[] = []
+
 export default function ChatView(): JSX.Element {
-  const sessions = useAppStore((s) => s.sessions)
-  const activeSessionId = useAppStore((s) => s.activeSessionId)
+  const active = useAppStore((s) => findSession(s.sessions, s.activeSessionId))
   const clearMessages = useAppStore((s) => s.clearMessages)
   const requestRecovery = useAppStore((s) => s.requestRecovery)
   const recovery = useAppStore((s) => s.recovery)
   const setNotes = useAppStore((s) => s.setNotes)
   const addIdea = useAppStore((s) => s.addIdea)
-
-  const active = sessions.find((s) => s.id === activeSessionId) ?? null
+  const toggleBookmarkMessage = useAppStore((s) => s.toggleBookmarkMessage)
 
   const [expandedIndices, setExpandedIndices] = useState<Set<number>>(new Set())
   const [toast, setToast] = useState<string | null>(null)
+  const toastTimer = useRef<number>()
+
+  const messages = active?.messages ?? EMPTY_MESSAGES
+  const { words, chunked, chunks } = useRecoveryInfo(messages)
+
+  const flash = useCallback((msg: string): void => {
+    setToast(msg)
+    if (toastTimer.current) window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => setToast(null), 2400)
+  }, [])
+
+  useEffect(() => () => {
+    if (toastTimer.current) window.clearTimeout(toastTimer.current)
+  }, [])
 
   if (!active) {
     return <div className="editor-empty muted">No brainstorm selected.</div>
   }
 
-  const flash = (msg: string): void => {
-    setToast(msg)
-    window.setTimeout(() => setToast(null), 2500)
-  }
-
   const recovering = recovery?.sessionId === active.id
-  const words = active.messages.length ? wordCount(buildRecoveryTranscript(active.messages)) : 0
-  const chunked = words >= RECOVERY_WORD_THRESHOLD
   const progressPct = recovery && recovery.total > 0 ? (recovery.sent / recovery.total) * 100 : 0
 
   const recover = (): void => {
-    if (!active.messages.length) return
-    requestRecovery(active.id, buildRecoveryChunks(active.messages))
+    if (!messages.length) return
+    requestRecovery(active.id, chunks)
   }
-
-  const toggleBookmarkMessage = useAppStore((s) => s.toggleBookmarkMessage)
 
   const toggleExpand = (index: number): void => {
     setExpandedIndices((prev) => {
