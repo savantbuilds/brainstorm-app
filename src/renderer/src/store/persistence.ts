@@ -88,7 +88,7 @@ export function usePersistence(): { loaded: boolean; flush: () => void } {
 
     const persist = (key: Slice): void => {
       const state = useAppStore.getState()
-      if (key === 'sessions' && state.settings.autosave === false) return
+      
       void window.api.storeSet(key, state[key])
     }
 

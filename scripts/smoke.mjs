@@ -12,10 +12,24 @@
 import { app, BrowserWindow, ipcMain, clipboard } from 'electron'
 import { join, dirname } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import Store from 'electron-store'
 
 // ESM has no __dirname; resolve it once and build the out/ paths from it.
 const here = dirname(fileURLToPath(import.meta.url))
 const out = join(here, '..', 'out')
+
+// Redirect the profile before anything reads it, so the run can't touch the
+// developer's real data.
+app.setPath('userData', mkdtempSync(join(tmpdir(), 'brainstorm-smoke-')))
+app.setPath('sessionData', app.getPath('userData'))
+
+// A real store, so hydration and the debounced autosave are actually covered.
+const store = new Store({
+  name: 'brainstorm-smoke',
+  defaults: { folders: [], sessions: [], settings: {} }
+})
 
 const failures = []
 
@@ -27,8 +41,9 @@ function fail(where, detail) {
 
 app.on('window-all-closed', () => {})
 
-// The renderer reaches the main process over these channels. Stub the handful
-// the boot path touches so the test never opens a dialog or touches real data.
+// The renderer reaches the main process over these channels. Clipboard and the
+// save dialog are stubbed (they'd pop UI), but the store handlers are the real
+// ones, so hydration and autosave are genuinely exercised.
 ipcMain.handle('clipboard:write', (_e, text) => {
   clipboard.writeText(text)
 })
@@ -36,8 +51,10 @@ ipcMain.handle('app:exportFile', async () => false)
 ipcMain.handle('app:getPreloadPath', async (_e, scriptName) =>
   pathToFileURL(join(out, 'preload', scriptName)).href
 )
-ipcMain.handle('store:get', async () => null)
-ipcMain.handle('store:set', async () => {})
+ipcMain.handle('store:get', async (_e, key) => store.get(key))
+ipcMain.handle('store:set', async (_e, key, value) => {
+  store.set(key, value)
+})
 
 // Runs inside the renderer. Uses the native value setter so React's controlled
 // inputs actually pick the change up, then dispatches the input event.
@@ -136,6 +153,28 @@ async function run() {
 
   const result = await wc.executeJavaScript(JOURNEY)
   if (result !== 'ok') fail('journey', `script returned ${String(result)}`)
+
+  // Autosave is debounced, so give it room to land before reading it back.
+  // This is the assertion that catches a regression in the persistence layer:
+  // the work done above must survive a restart.
+  await new Promise((r) => setTimeout(r, 900))
+
+  const saved = store.get('sessions')
+  const savedFolders = store.get('folders')
+  if (savedFolders.length !== 1) {
+    fail('persistence', `expected 1 workspace on disk, got ${savedFolders.length}`)
+  }
+  if (saved.length !== 1) {
+    fail('persistence', `expected 1 brainstorm on disk, got ${saved.length}`)
+  } else {
+    const s = saved[0]
+    if (s.folderId !== savedFolders[0].id) {
+      fail('persistence', `brainstorm folderId ${s.folderId} does not match workspace ${savedFolders[0].id}`)
+    }
+    if (!s.notes.includes('- one')) {
+      fail('persistence', `notes were not autosaved: ${JSON.stringify(s.notes)}`)
+    }
+  }
 }
 
 app.whenReady().then(async () => {
