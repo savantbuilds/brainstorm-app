@@ -10,6 +10,7 @@ export type AccentName = 'azure' | 'violet' | 'emerald' | 'amber' | 'rose'
 
 export interface AppSettings {
   theme: 'dark' | 'light'
+  /** Editor font size in px, applied to the notes surface. */
   fontSize: number
   aiPanelWidth: number
   sidebarWidth: number

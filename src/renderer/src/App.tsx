@@ -14,6 +14,7 @@ export default function App(): JSX.Element {
   const theme = useAppStore((s) => s.settings.theme)
   const accent = useAppStore((s) => s.settings.accent ?? 'azure')
   const focusMode = useAppStore((s) => s.settings.focusMode ?? false)
+  const fontSize = useAppStore((s) => s.settings.fontSize)
   const aiPanelVisible = useAppStore((s) => s.aiPanelVisible)
 
   const [aiWidth, setAiWidth] = useState(() => useAppStore.getState().settings.aiPanelWidth)
@@ -78,6 +79,11 @@ export default function App(): JSX.Element {
         run: () => st().setSettings({ theme: st().settings.theme === 'dark' ? 'light' : 'dark' })
       },
       { id: 'cycle-accent', label: 'View: Cycle accent colour', run: () => st().cycleAccent() },
+      ...[12, 14, 16, 18].map((size) => ({
+        id: `font-${size}`,
+        label: `Notes: ${size === st().settings.fontSize ? '• ' : ''}Font size ${size}px`,
+        run: () => st().setSettings({ fontSize: size })
+      })),
       { id: 'open-workspaces', label: 'Workspace: Open folder selector', run: () => st().setFolderModal(true) },
       {
         id: 'consolidate',
@@ -212,6 +218,9 @@ export default function App(): JSX.Element {
     <div
       className={`app theme-${theme}${dragging ? ' dragging' : ''}${focusMode ? ' focus-mode' : ''}`}
       data-accent={accent as AccentName}
+      // The notes surface honours the user's font size; everything else stays
+      // on the type scale so the chrome doesn't drift.
+      style={{ '--editor-font-size': `${fontSize}px` } as React.CSSProperties}
     >
       <TopBar />
       <div className="main-row">

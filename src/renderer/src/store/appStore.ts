@@ -121,13 +121,10 @@ interface AppState {
   toggleAiPanel: () => void
   setCommandPalette: (open: boolean) => void
   toggleFocusMode: () => void
-  setActiveSession: (id: string | null) => void
   cycleAccent: () => void
 
   // --- session actions ---
   duplicateSession: (id: string) => void
-  moveSession: (id: string, folderId: string) => void
-  appendToNotes: (id: string, text: string) => void
   promoteIdeaToNotes: (sessionId: string, ideaId: string) => void
 }
 
@@ -142,9 +139,6 @@ export function findSession(sessions: BrainstormSession[], id: string | null): B
   return sessions.find((s) => s.id === id) ?? null
 }
 
-export const selectActiveSession = (s: AppState): BrainstormSession | null =>
-  findSession(s.sessions, s.activeSessionId)
-
 export const selectActiveFolder = (s: AppState): WorkFolder | null =>
   findFolder(s.folders, s.activeFolderId)
 
@@ -152,29 +146,6 @@ function findFolder(folders: WorkFolder[], id: string | null): WorkFolder | null
   if (!id) return null
   return folders.find((f) => f.id === id) ?? null
 }
-
-// The lightweight shape the sidebar actually renders. Selecting this with a
-// shallow comparison means typing in the notes editor (which mutates only the
-// active session's body) doesn't invalidate the list unless the row's own
-// summary text changed.
-export interface SessionSummary {
-  id: string
-  title: string
-  starred: boolean
-  ideas: number
-  messages: number
-  updatedAt: number
-}
-
-export const selectSessionSummaries = (s: AppState): SessionSummary[] =>
-  s.sessions.map((x) => ({
-    id: x.id,
-    title: x.title,
-    starred: !!x.starred,
-    ideas: x.ideas.length,
-    messages: x.messages.length,
-    updatedAt: x.updatedAt
-  }))
 
 // Total counts for the status bar, so it never re-renders on a body-text edit.
 export const selectTotals = (s: AppState): { sessions: number; ideas: number } => ({
@@ -319,15 +290,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       })
     })),
 
-  // Appends a block of text to the notes body, separated by a blank line.
-  appendToNotes: (id, text) =>
-    set((state) => ({
-      sessions: touchSession(state.sessions, id, (s) => {
-        const body = text.trim()
-        if (!body) return s
-        return { ...s, notes: s.notes.trim() ? `${s.notes.replace(/\s+$/, '')}\n\n${body}` : body }
-      })
-    })),
 
   // Copies a brainstorm (notes, ideas, and the conversation link) into a new
   // session. The transcript is intentionally not carried over — the copy is a
@@ -354,11 +316,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { sessions, activeSessionId: copy.id }
     }),
 
-  // Re-homes a brainstorm into another workspace.
-  moveSession: (id, folderId) =>
-    set((state) => ({
-      sessions: touchSession(state.sessions, id, (s) => ({ ...s, folderId }))
-    })),
 
   addMessage: (id, message) =>
     set((state) => ({
@@ -391,7 +348,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSettings: (s) => set((state) => ({ settings: { ...state.settings, ...s } })),
   toggleAiPanel: () => set((state) => ({ aiPanelVisible: !state.aiPanelVisible })),
   setCommandPalette: (open) => set({ commandPaletteOpen: open }),
-  setActiveSession: (id) => set({ activeSessionId: id }),
 
   // Focus mode collapses the sidebar and the AI panel, leaving only the notes —
   // the equivalent of a full-screen editor for a stretch of uninterrupted work.

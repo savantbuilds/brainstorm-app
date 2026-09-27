@@ -122,6 +122,19 @@ const JOURNEY = `(async () => {
   tabs[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
   await wait(150);
 
+  // The font size setting is stored and applied to the notes surface.
+  const before = getComputedStyle(document.querySelector('.notes-body')).fontSize;
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, shiftKey: true, bubbles: true }));
+  await wait(150);
+  const sizeCmd = [...document.querySelectorAll('.palette-item')].find((el) => el.textContent.includes('Font size 18px'));
+  if (!sizeCmd) throw new Error('font size command missing from palette');
+  sizeCmd.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await wait(250);
+  const after = getComputedStyle(document.querySelector('.notes-body')).fontSize;
+  if (parseFloat(after) <= parseFloat(before)) {
+    throw new Error('font size did not apply: ' + before + ' -> ' + after);
+  }
+
   return 'ok';
 })()`
 

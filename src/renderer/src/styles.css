@@ -2206,7 +2206,8 @@ textarea::placeholder { color: var(--fg-faint); }
 .notes-body,
 .notes-preview {
   padding: var(--space-6) var(--space-7);
-  font-size: var(--text-md);
+  /* Driven by the user's fontSize setting, set on the app root. */
+  font-size: var(--editor-font-size, var(--text-md));
   line-height: var(--leading-relaxed);
   font-family: var(--font-ui);
   background: var(--bg-sunken);

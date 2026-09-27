@@ -1,7 +1,9 @@
 import Store from 'electron-store'
-import type { BrainstormSession, StoreShape } from '@shared/types'
+import type { StoreShape } from '@shared/types'
 
 // Local persistence layer. Holds work folders, brainstorm sessions and settings.
+// The renderer owns all mutation (via its zustand store) and writes back through
+// the store:* IPC channels, so the main side is read-through only.
 
 const store = new Store<StoreShape>({
   name: 'brainstorm-app',
@@ -23,21 +25,4 @@ export function getKey<K extends keyof StoreShape>(key: K): StoreShape[K] {
 
 export function setKey<K extends keyof StoreShape>(key: K, value: StoreShape[K]): void {
   store.set(key, value)
-}
-
-export function createSession(folderId: string, title: string): BrainstormSession {
-  const sessions = store.get('sessions')
-  const session: BrainstormSession = {
-    id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    folderId,
-    title,
-    notes: '',
-    ideas: [],
-    messages: [],
-    createdAt: Date.now(),
-    updatedAt: Date.now()
-  }
-  sessions.unshift(session)
-  store.set('sessions', sessions)
-  return session
 }
