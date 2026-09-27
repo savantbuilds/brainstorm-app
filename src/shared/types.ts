@@ -6,13 +6,23 @@ export type AIAction = 'brainstorm' | 'expand' | 'critique' | 'ask'
 
 export type SessionSort = 'recent' | 'alpha' | 'created'
 
+export type AccentName = 'azure' | 'violet' | 'emerald' | 'amber' | 'rose'
+
 export interface AppSettings {
   theme: 'dark' | 'light'
   fontSize: number
   aiPanelWidth: number
   sidebarWidth: number
   sessionSort?: SessionSort
+  /** UI accent hue, applied as a CSS custom property on the app root. */
+  accent?: AccentName
+  /** Hide sidebar + AI panel for a distraction-free writing surface. */
+  focusMode?: boolean
+  /** Coalesce rapid writes. Rarely worth disabling; kept for testing. */
+  autosave?: boolean
 }
+
+export const ACCENTS: AccentName[] = ['azure', 'violet', 'emerald', 'amber', 'rose']
 
 // A captured idea — either something the user wrote or a response pulled out of
 // the ChatGPT panel.
@@ -112,14 +122,9 @@ export interface InboundPayload {
   timestamp: number
 }
 
-// A response scraped out of the ChatGPT panel, awaiting the user's decision to
-// keep it (add to notes / save as idea) or dismiss it.
-export interface PendingResponse {
-  id: string
-  content: string
-  codeBlocks: CodeBlock[]
-  timestamp: number
-}
+// A response scraped out of the ChatGPT panel is recorded straight into the
+// session transcript (ChatMessage), so no separate pending-response queue is
+// needed on the host side.
 
 export interface DomBridgeErrorPayload {
   channel?: string

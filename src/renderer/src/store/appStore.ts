@@ -1,10 +1,10 @@
 import { create } from 'zustand'
+import { ACCENTS } from '@shared/types'
 import type {
   AppSettings,
   BrainstormSession,
   ChatMessage,
   Idea,
-  PendingResponse,
   WorkFolder
 } from '@shared/types'
 
@@ -76,9 +76,6 @@ interface AppState {
   openFolder: (id: string) => void
   setFolderModal: (open: boolean) => void
 
-  // AI responses scraped from the ChatGPT panel, awaiting keep/dismiss.
-  pendingResponses: PendingResponse[]
-
   // Conversation recovery (context re-injection).
   recoveryRequest: RecoveryRequest | null
   recovery: RecoveryProgress | null
@@ -121,12 +118,69 @@ interface AppState {
   setSettings: (s: Partial<AppSettings>) => void
   toggleAiPanel: () => void
   setCommandPalette: (open: boolean) => void
+  toggleFocusMode: () => void
+  setActiveSession: (id: string | null) => void
+  cycleAccent: () => void
 
-  // --- AI responses ---
-  addPendingResponse: (response: PendingResponse) => void
-  clearPendingResponse: (id: string) => void
-  clearAllPendingResponses: () => void
+  // --- session actions ---
+  duplicateSession: (id: string) => void
+  moveSession: (id: string, folderId: string) => void
+  appendToNotes: (id: string, text: string) => void
+  promoteIdeaToNotes: (sessionId: string, ideaId: string) => void
 }
+
+// --- Derived selectors -------------------------------------------------------
+// Components subscribe through these instead of picking whole slices off the
+// store. A raw `useAppStore(s => s.sessions)` re-renders the component on every
+// keystroke anywhere in the app; a selector that returns a stable reference for
+// unchanged data does not.
+
+export function findSession(sessions: BrainstormSession[], id: string | null): BrainstormSession | null {
+  if (!id) return null
+  return sessions.find((s) => s.id === id) ?? null
+}
+
+export const selectActiveSession = (s: AppState): BrainstormSession | null =>
+  findSession(s.sessions, s.activeSessionId)
+
+export const selectActiveFolder = (s: AppState): WorkFolder | null =>
+  findFolder(s.folders, s.activeFolderId)
+
+function findFolder(folders: WorkFolder[], id: string | null): WorkFolder | null {
+  if (!id) return null
+  return folders.find((f) => f.id === id) ?? null
+}
+
+// The lightweight shape the sidebar actually renders. Selecting this with a
+// shallow comparison means typing in the notes editor (which mutates only the
+// active session's body) doesn't invalidate the list unless the row's own
+// summary text changed.
+export interface SessionSummary {
+  id: string
+  title: string
+  starred: boolean
+  ideas: number
+  messages: number
+  updatedAt: number
+}
+
+export const selectSessionSummaries = (s: AppState): SessionSummary[] =>
+  s.sessions.map((x) => ({
+    id: x.id,
+    title: x.title,
+    starred: !!x.starred,
+    ideas: x.ideas.length,
+    messages: x.messages.length,
+    updatedAt: x.updatedAt
+  }))
+
+// Total counts for the status bar, so it never re-renders on a body-text edit.
+export const selectTotals = (s: AppState): { sessions: number; ideas: number } => ({
+  sessions: s.sessions.length,
+  ideas: s.sessions.reduce((n, x) => n + x.ideas.length, 0)
+})
+
+// --- Mutators ----------------------------------------------------------------
 
 // Mutates the matching session and bumps updatedAt.
 function touchSession(
@@ -144,10 +198,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   folderModalOpen: true,
   sessions: [],
   activeSessionId: null,
-  settings: { theme: 'dark', fontSize: 14, aiPanelWidth: 420, sidebarWidth: 260, sessionSort: 'recent' },
+  settings: {
+    theme: 'dark',
+    fontSize: 14,
+    aiPanelWidth: 420,
+    sidebarWidth: 260,
+    sessionSort: 'recent',
+    accent: 'azure',
+    focusMode: false,
+    autosave: true
+  },
   aiPanelVisible: true,
   commandPaletteOpen: false,
-  pendingResponses: [],
   recoveryRequest: null,
   recovery: null,
   aiActionRequest: null,
@@ -241,6 +303,60 @@ export const useAppStore = create<AppState>((set, get) => ({
       }))
     })),
 
+  // Moves a captured idea into the notes body and retires the card — the common
+  // next step once an idea is worth keeping.
+  promoteIdeaToNotes: (sessionId, ideaId) =>
+    set((state) => ({
+      sessions: touchSession(state.sessions, sessionId, (s) => {
+        const idea = s.ideas.find((i) => i.id === ideaId)
+        if (!idea) return s
+        const block = `- ${idea.text.trim()}`
+        const notes = s.notes.trim() ? `${s.notes.replace(/\s+$/, '')}\n\n${block}` : block
+        return { ...s, notes, ideas: s.ideas.filter((i) => i.id !== ideaId) }
+      })
+    })),
+
+  // Appends a block of text to the notes body, separated by a blank line.
+  appendToNotes: (id, text) =>
+    set((state) => ({
+      sessions: touchSession(state.sessions, id, (s) => {
+        const body = text.trim()
+        if (!body) return s
+        return { ...s, notes: s.notes.trim() ? `${s.notes.replace(/\s+$/, '')}\n\n${body}` : body }
+      })
+    })),
+
+  // Copies a brainstorm (notes, ideas, and the conversation link) into a new
+  // session. The transcript is intentionally not carried over — the copy is a
+  // fresh line of thinking seeded from the original.
+  duplicateSession: (id) =>
+    set((state) => {
+      const source = state.sessions.find((s) => s.id === id)
+      if (!source) return state
+      const now = Date.now()
+      const copy: BrainstormSession = {
+        ...source,
+        id: newId('sess'),
+        title: `${source.title || 'Untitled brainstorm'} (copy)`,
+        createdAt: now,
+        updatedAt: now,
+        starred: false,
+        notes: source.notes,
+        ideas: source.ideas.map((i) => ({ ...i, id: newId('idea'), createdAt: now })),
+        messages: []
+      }
+      const at = state.sessions.findIndex((s) => s.id === id)
+      const sessions = [...state.sessions]
+      sessions.splice(at + 1, 0, copy)
+      return { sessions, activeSessionId: copy.id }
+    }),
+
+  // Re-homes a brainstorm into another workspace.
+  moveSession: (id, folderId) =>
+    set((state) => ({
+      sessions: touchSession(state.sessions, id, (s) => ({ ...s, folderId }))
+    })),
+
   addMessage: (id, message) =>
     set((state) => ({
       sessions: touchSession(state.sessions, id, (s) => ({
@@ -272,12 +388,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSettings: (s) => set((state) => ({ settings: { ...state.settings, ...s } })),
   toggleAiPanel: () => set((state) => ({ aiPanelVisible: !state.aiPanelVisible })),
   setCommandPalette: (open) => set({ commandPaletteOpen: open }),
+  setActiveSession: (id) => set({ activeSessionId: id }),
 
-  addPendingResponse: (response) =>
-    set((state) => ({ pendingResponses: [...state.pendingResponses, response] })),
-  clearPendingResponse: (id) =>
-    set((state) => ({ pendingResponses: state.pendingResponses.filter((r) => r.id !== id) })),
-  clearAllPendingResponses: () => set({ pendingResponses: [] }),
+  // Focus mode collapses the sidebar and the AI panel, leaving only the notes —
+  // the equivalent of a full-screen editor for a stretch of uninterrupted work.
+  toggleFocusMode: () =>
+    set((state) => ({ settings: { ...state.settings, focusMode: !state.settings.focusMode } })),
+
+  cycleAccent: () =>
+    set((state) => {
+      const order = ACCENTS
+      const next = order[(order.indexOf(state.settings.accent ?? 'azure') + 1) % order.length]
+      return { settings: { ...state.settings, accent: next } }
+    }),
 
   requestRecovery: (sessionId, chunks) =>
     set({ recoveryRequest: { sessionId, chunks, nonce: Date.now() } }),

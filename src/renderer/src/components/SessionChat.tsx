@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { BrainstormSession, PendingResponse } from '@shared/types'
+import type { BrainstormSession } from '@shared/types'
 import { useWebviewBridge } from '../hooks/useWebviewBridge'
 import { useAppStore } from '../store/appStore'
 
@@ -67,39 +67,31 @@ export default function SessionChat({ session, isActive, preloadPath, onToast }:
       if (recoveringRef.current) return
       const st = useAppStore.getState()
       st.addMessage(session.id, { role: 'assistant', content: data.text, timestamp: data.timestamp })
-      if (isActiveRef.current) {
-        const response: PendingResponse = {
-          id: `resp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-          content: data.text,
-          codeBlocks: data.codeBlocks,
+      // A reply to a notes context-menu action is offered as an inline
+      // suggestion in the editor rather than just landing in the transcript.
+      if (pendingActionOriginalTextRef.current) {
+        st.setInlineSuggestion({
+          id: `sug_${Date.now()}`,
+          sessionId: session.id,
+          originalText: pendingActionOriginalTextRef.current,
+          suggestedText: data.text,
           timestamp: data.timestamp
-        }
-        st.addPendingResponse(response)
+        })
+        pendingActionOriginalTextRef.current = null
+      }
 
-        if (pendingActionOriginalTextRef.current) {
-          st.setInlineSuggestion({
-            id: `sug_${Date.now()}`,
-            sessionId: session.id,
-            originalText: pendingActionOriginalTextRef.current,
-            suggestedText: data.text,
-            timestamp: data.timestamp
-          })
-          pendingActionOriginalTextRef.current = null
-        }
-
+      if (isActiveRef.current) {
         // Handle consolidation progression
         const cs = st.consolidationState
         if (cs && cs.active && cs.sessionId === session.id) {
           if (cs.currentChunkIndex < cs.totalChunks - 1) {
             st.advanceConsolidation()
-            flash(`Consolidating... Part ${cs.currentChunkIndex + 2} of ${cs.totalChunks}`)
+            flash(`Consolidating… part ${cs.currentChunkIndex + 2} of ${cs.totalChunks}`)
           } else {
             st.setNotes(session.id, data.text)
             st.cancelConsolidation()
-            flash('✨ Notes consolidated successfully!')
+            flash('Notes consolidated')
           }
-        } else {
-          flash('Response received from ChatGPT')
         }
       }
     })
