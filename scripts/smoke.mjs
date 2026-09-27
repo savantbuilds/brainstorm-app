@@ -39,6 +39,12 @@ function fail(where, detail) {
   console.error(`SMOKE FAILURE (${where}):`, message)
 }
 
+// Headless CI boxes have no usable GPU, and the software fallback is both
+// slower and noisy (it logs driver errors to stderr, which callers read as a
+// failed run). The smoke test never needs hardware acceleration.
+app.disableHardwareAcceleration()
+app.commandLine.appendSwitch('disable-gpu')
+
 app.on('window-all-closed', () => {})
 
 // The renderer reaches the main process over these channels. Clipboard and the
