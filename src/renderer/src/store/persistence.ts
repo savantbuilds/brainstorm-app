@@ -86,9 +86,11 @@ export function usePersistence(): { loaded: boolean; flush: () => void } {
   useEffect(() => {
     if (!loaded) return
 
+    // Honour the autosave opt-out for session writes; settings and folders are
+    // still written, so turning it back on restores everything.
     const persist = (key: Slice): void => {
       const state = useAppStore.getState()
-      
+      if (key === 'sessions' && state.settings.autosave === false) return
       void window.api.storeSet(key, state[key])
     }
 
