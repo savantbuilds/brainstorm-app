@@ -118,7 +118,10 @@ function buildAppMenu(win: BrowserWindow): void {
           label: 'Workspaces…',
           accelerator: 'CmdOrCtrl+Shift+W',
           click: send('open-workspaces')
-        }
+        },
+        { type: 'separator' },
+        { label: 'Cloud Backup…', accelerator: 'CmdOrCtrl+Shift+B', click: send('open-backup') },
+        { label: 'Back Up Now', click: send('backup-now') }
       ]
     }
   ]

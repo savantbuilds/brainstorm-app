@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AccentName } from '@shared/types'
 import AIPanel from './components/AIPanel'
+import BackupPanel from './components/BackupPanel'
 import CenterPane from './components/CenterPane'
 import CommandPalette, { type Command } from './components/CommandPalette'
 import SessionList from './components/SessionList'
@@ -85,6 +86,16 @@ export default function App(): JSX.Element {
         run: () => st().setSettings({ fontSize: size })
       })),
       { id: 'open-workspaces', label: 'Workspace: Open folder selector', run: () => st().setFolderModal(true) },
+      { id: 'open-backup', label: 'Backup: Open settings', run: () => st().setBackupPanel(true) },
+      {
+        id: 'backup-now',
+        label: 'Backup: Back up now',
+        hint: 'Ctrl+Shift+B',
+        run: () => {
+          st().setBackupPanel(true)
+          void window.api.backupNow()
+        }
+      },
       {
         id: 'consolidate',
         label: 'Notes: Consolidate with AI',
@@ -135,6 +146,13 @@ export default function App(): JSX.Element {
         case 'open-workspaces':
           st.setFolderModal(true)
           break
+        case 'open-backup':
+          st.setBackupPanel(true)
+          break
+        case 'backup-now':
+          st.setBackupPanel(true)
+          void window.api.backupNow()
+          break
         default:
           break
       }
@@ -167,6 +185,10 @@ export default function App(): JSX.Element {
       } else if (mod && !e.shiftKey && key === 'e' && !typing) {
         e.preventDefault()
         window.dispatchEvent(new CustomEvent('brainstorm:export'))
+      } else if (mod && e.shiftKey && key === 'b') {
+        e.preventDefault()
+        st.setBackupPanel(true)
+        void window.api.backupNow()
       } else if (e.key === 'Escape' && st.commandPaletteOpen) {
         st.setCommandPalette(false)
       }
@@ -253,6 +275,7 @@ export default function App(): JSX.Element {
       <StatusBar />
       <CommandPalette commands={commands} />
       <WorkFolderModal />
+      <BackupPanel />
     </div>
   )
 }

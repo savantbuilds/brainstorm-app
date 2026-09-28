@@ -245,7 +245,7 @@ export interface ExposedApi {
   backupSecretPersisted: () => Promise<boolean>
   backupNow: () => Promise<BackupRunResult>
   backupList: () => Promise<BackupSnapshotInfo[]>
-  backupInspect: (name: string, passphrase?: string) => Promise<BackupPreview>
+  backupInspect: (name: string, passphrase?: string | null) => Promise<BackupPreview>
   /** Replaces local data. Pass keepLocal=true to merge instead of overwrite. */
   backupRestore: (name: string, passphrase: string | null, keepLocal: boolean) => Promise<BackupRunResult>
   backupTestConnection: () => Promise<{ ok: boolean; message: string }>

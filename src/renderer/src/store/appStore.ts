@@ -122,6 +122,12 @@ interface AppState {
   setCommandPalette: (open: boolean) => void
   toggleFocusMode: () => void
   cycleAccent: () => void
+  backupPanelOpen: boolean
+  setBackupPanel: (open: boolean) => void
+  /** Bumped after a restore so views know to re-read the whole store. */
+  dataVersion: number
+  /** Reloads folders and sessions from disk after a restore. */
+  reloadFromDisk: () => void
 
   // --- session actions ---
   duplicateSession: (id: string) => void
@@ -183,6 +189,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   aiPanelVisible: true,
   commandPaletteOpen: false,
+  backupPanelOpen: false,
+  dataVersion: 0,
   hydrated: false,
   recoveryRequest: null,
   recovery: null,
@@ -348,6 +356,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSettings: (s) => set((state) => ({ settings: { ...state.settings, ...s } })),
   toggleAiPanel: () => set((state) => ({ aiPanelVisible: !state.aiPanelVisible })),
   setCommandPalette: (open) => set({ commandPaletteOpen: open }),
+  setBackupPanel: (open) => set({ backupPanelOpen: open }),
+
+  // A restore replaces folders and sessions wholesale in the main process, so
+  // the renderer has to pull them back in. The version counter lets views that
+  // cache derived data know to recompute.
+  reloadFromDisk: () => {
+    void Promise.all([window.api.storeGet('folders'), window.api.storeGet('sessions')]).then(
+      ([folders, sessions]) => {
+        useAppStore.setState({
+          folders: folders ?? [],
+          sessions: sessions ?? [],
+          activeFolderId: null,
+          activeSessionId: null,
+          dataVersion: get().dataVersion + 1
+        })
+      }
+    )
+  },
 
   // Focus mode collapses the sidebar and the AI panel, leaving only the notes —
   // the equivalent of a full-screen editor for a stretch of uninterrupted work.

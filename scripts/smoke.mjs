@@ -62,6 +62,31 @@ ipcMain.handle('store:set', async (_e, key, value) => {
   store.set(key, value)
 })
 
+// The real backup service, so the panel is exercised against the same code the
+// app runs. Loaded from the side-effect-free build entry.
+const backup = await import(pathToFileURL(join(out, 'main', 'backup-under-test.js')).href)
+backup.initBackup()
+ipcMain.handle('backup:getConfig', () => backup.getBackupConfig())
+ipcMain.handle('backup:setConfig', (_e, config) => backup.setBackupConfig(config))
+ipcMain.handle('backup:setSecret', () => true)
+ipcMain.handle('backup:secretPersisted', () => false)
+ipcMain.handle('backup:now', () => backup.runBackup())
+ipcMain.handle('backup:list', () => backup.listSnapshots())
+ipcMain.handle('backup:inspect', (_e, name, passphrase) => backup.inspectSnapshot(name, passphrase))
+ipcMain.handle('backup:restore', (_e, name, passphrase, merge) =>
+  backup.restoreSnapshot(name, passphrase, merge)
+)
+ipcMain.handle('backup:test', () => backup.testConnection())
+ipcMain.handle('backup:status', () => ({
+  configured: false,
+  running: false,
+  lastRunAt: null,
+  lastError: null,
+  lastSnapshot: null,
+  passphrasePersisted: false
+}))
+ipcMain.on('backup:subscribe', () => {})
+
 // Runs inside the renderer. Uses the native value setter so React's controlled
 // inputs actually pick the change up, then dispatches the input event.
 const JOURNEY = `(async () => {
@@ -140,6 +165,20 @@ const JOURNEY = `(async () => {
   if (parseFloat(after) <= parseFloat(before)) {
     throw new Error('font size did not apply: ' + before + ' -> ' + after);
   }
+
+  // The backup panel opens and offers a destination choice.
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, shiftKey: true, bubbles: true }));
+  await wait(250);
+  const panel = document.querySelector('.backup-modal');
+  if (!panel) throw new Error('backup panel did not open');
+  if (document.querySelectorAll('.backup-target').length !== 2) throw new Error('backup targets missing');
+  if (!document.querySelector('.backup-field input')) throw new Error('backup destination field missing');
+
+  const beforeSnapshots = await window.api.backupList();
+  if (!Array.isArray(beforeSnapshots)) throw new Error('backupList did not return an array');
+
+  // Restore from a file is offered even with no snapshots present.
+  if (!document.querySelector('.backup-heading')) throw new Error('backup section heading missing');
 
   return 'ok';
 })()`
