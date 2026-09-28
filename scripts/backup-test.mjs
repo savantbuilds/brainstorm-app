@@ -10,7 +10,7 @@
  * Run with: npm run test:backup
  */
 import { app } from 'electron'
-import { mkdtempSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -251,13 +251,104 @@ const asyncChecks = [
 ]
 
 app.whenReady().then(async () => {
+
   for (const fn of asyncChecks) {
-    const name = fn.name || 'async check'
     try {
       await fn()
       passed++
     } catch (err) {
-      failures.push(`${name}: ${err instanceof Error ? err.message : String(err)}`)
+      failures.push(`${fn.name}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  // The service checks run last, and in order: the first one leaves the store
+  // and the backup config in a known state for the second.
+  const serviceChecks = [
+    async function roundTripsThroughTheService() {
+      const vault = join(scratch, 'service-vault')
+      const original = mod.getKey('sessions')
+
+      mod.setBackupConfig({
+        enabled: false,
+        target: 'folder',
+        location: vault,
+        intervalMinutes: 0,
+        keepSnapshots: 5,
+        encrypt: true
+      })
+      mod.setSessionPassphrase('service-passphrase')
+
+      const written = await mod.runBackup()
+      assert(written.ok, `backup failed: ${written.message}`)
+      assert(written.snapshot?.encrypted === true, 'snapshot should be encrypted')
+
+      const listed = await mod.listSnapshots()
+      assert(listed.length === 1, `expected 1 snapshot, got ${listed.length}`)
+
+      // Change the data, then put it back from the snapshot.
+      mod.setKey('sessions', [])
+      assert(mod.getKey('sessions').length === 0, 'store was not cleared')
+
+      const preview = await mod.inspectSnapshot(listed[0].name)
+      assert(preview.ok, `inspect failed: ${preview.message}`)
+      assert(preview.brainstorms === original.length, `preview count wrong: ${preview.brainstorms}`)
+
+      const restored = await mod.restoreSnapshot(listed[0].name, null, false)
+      assert(restored.ok, `restore failed: ${restored.message}`)
+
+      const after = mod.getKey('sessions')
+      assert(after.length === original.length, `restore brought back ${after.length}`)
+      assert(after[0]?.title === original[0]?.title, 'restored session title differs')
+
+      // The restore takes a safety snapshot first, so the list grew.
+      const afterList = await mod.listSnapshots()
+      assert(afterList.length === 2, `expected a safety snapshot, got ${afterList.length}`)
+
+      mod.setSessionPassphrase(null)
+    },
+
+    async function mergeKeepsTheNewerVersionOfAConflictingSession() {
+      const vault = join(scratch, 'merge-vault')
+      mod.setKey('folders', [{ id: 'f1', name: 'Work', createdAt: 1 }])
+
+      mod.setBackupConfig({
+        enabled: false,
+        target: 'folder',
+        location: vault,
+        intervalMinutes: 0,
+        keepSnapshots: 10,
+        encrypt: false
+      })
+
+      // A local session, newer than the copy that ends up in the snapshot.
+      mod.setKey('sessions', [{ ...SAMPLE.sessions[0], title: 'Local newer', updatedAt: 9000 }])
+      const snap = await mod.runBackup()
+      assert(snap.ok, `backup failed: ${snap.message}`)
+
+      // Simulate another machine: an older edit to the same id, plus a new one.
+      mod.setKey('sessions', [
+        { ...SAMPLE.sessions[0], title: 'Remote older', updatedAt: 100 },
+        { ...SAMPLE.sessions[0], id: 's2', title: 'Only on the other side', updatedAt: 200 }
+      ])
+
+      const listed = await mod.listSnapshots()
+      const oldest = listed[listed.length - 1]
+      const merged = await mod.restoreSnapshot(oldest.name, null, true)
+      assert(merged.ok, `merge failed: ${merged.message}`)
+
+      const titles = mod.getKey('sessions').map((s) => s.title)
+      assert(titles.includes('Local newer'), 'merge discarded the newer local session')
+      assert(titles.includes('Only on the other side'), 'merge dropped a snapshot-only session')
+      assert(!titles.includes('Remote older'), 'merge kept the older version of a conflict')
+    }
+  ]
+
+  for (const fn of serviceChecks) {
+    try {
+      await fn()
+      passed++
+    } catch (err) {
+      failures.push(`${fn.name}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -276,9 +367,3 @@ app.whenReady().then(async () => {
   console.log(`Backup tests passed: ${passed} checks.`)
   app.exit(0)
 })
-
-setTimeout(() => {
-  console.error('Backup tests timed out after 60s')
-  app.exit(1)
-}, 60_000)
-

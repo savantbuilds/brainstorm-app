@@ -14,6 +14,10 @@ export {
   SNAPSHOT_EXT,
   WebdavTarget
 } from './target'
+// storage.ts is re-exported so the tests can drive the service through the same
+// store instance it uses, rather than a second electron-store on the same file
+// whose in-memory copy would drift.
+export { getKey, setKey } from '../storage'
 export {
   getBackupConfig,
   initBackup,

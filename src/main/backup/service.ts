@@ -15,7 +15,7 @@ import {
   setSecret
 } from './keychain'
 import { openSnapshot, sealSnapshot } from './crypto'
-import { createTarget, makeSnapshotName, type BackupTarget } from './target'
+import { createTarget, makeSnapshotName, SNAPSHOT_EXT, type BackupTarget } from './target'
 
 // Orchestrates backups: reads the live store, seals a snapshot, writes it to the
 // target, prunes old ones, and restores in the other direction.
@@ -224,7 +224,7 @@ async function doBackup(): Promise<BackupRunResult> {
       passphrase
     })
 
-    const name = makeSnapshotName(now)
+    const name = await uniqueName(target, now)
     await target.write(name, JSON.stringify(envelope))
     const pruned = await prune(target)
 
@@ -242,6 +242,26 @@ async function doBackup(): Promise<BackupRunResult> {
     setStatus({ running: false, lastError: message })
     return { ok: false, message }
   }
+}
+
+/**
+ * Picks a snapshot name that isn't already taken.
+ *
+ * Names are timestamp-based, so two backups within the same millisecond would
+ * otherwise collide and silently overwrite each other. That is easy to hit: a
+ * scheduled run landing on a manual one, or the safety snapshot a restore
+ * takes clobbering the very snapshot being restored.
+ */
+async function uniqueName(target: BackupTarget, at: number): Promise<string> {
+  const base = makeSnapshotName(at)
+  const taken = new Set((await target.list()).map((s) => s.name))
+  if (!taken.has(base)) return base
+
+  for (let n = 1; n < 1000; n++) {
+    const candidate = `${base.slice(0, -SNAPSHOT_EXT.length)}-${n}${SNAPSHOT_EXT}`
+    if (!taken.has(candidate)) return candidate
+  }
+  throw new Error('Could not find an unused snapshot name.')
 }
 
 /** Deletes the oldest snapshots beyond the retention limit. */
