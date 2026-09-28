@@ -1,11 +1,16 @@
 import { app, BrowserWindow, session } from 'electron'
 import { registerIpcHandlers } from './ipc-handlers'
 import { createWindow, guardWebview } from './window'
+import { disposeBackup, initBackup } from './backup/service'
 
 app.whenReady().then(() => {
   if (process.platform === 'win32') {
     app.setAppUserModelId('com.yourname.brainstorm-app')
   }
+
+  // Loads the backup config and arms the automatic-backup timer. Runs before
+  // the window is created so the first paint already reflects the setting.
+  initBackup()
 
   registerIpcHandlers()
 
@@ -32,5 +37,8 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+  // Stop the backup timer and drop its listeners; without this a pending
+  // automatic backup can keep the process alive after the last window closes.
+  disposeBackup()
   if (process.platform !== 'darwin') app.quit()
 })

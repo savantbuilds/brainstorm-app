@@ -90,6 +90,98 @@ export interface StoreShape {
   settings: AppSettings
 }
 
+// --- Cloud backup ------------------------------------------------------------
+//
+// Backups are provider-agnostic. A "target" is anywhere a snapshot can be
+// written and read back: a folder that some other program syncs (Dropbox,
+// OneDrive, Google Drive) or a WebDAV endpoint (Nextcloud, ownCloud, a NAS).
+// Keeping it to these two means no vendor SDK, API key, or OAuth dance, and
+// they cover the setups people already have.
+
+export type BackupTargetKind = 'folder' | 'webdav'
+
+export interface BackupConfig {
+  enabled: boolean
+  target: BackupTargetKind
+  /** Absolute path (folder target) or base URL (webdav target). */
+  location: string
+  /** WebDAV only. Never written to the settings file — see safeStorage. */
+  username?: string
+  /** Minutes between automatic backups. 0 disables the timer. */
+  intervalMinutes: number
+  /** How many snapshots to keep at the target before pruning the oldest. */
+  keepSnapshots: number
+  /** Encrypt snapshot contents with a passphrase. */
+  encrypt: boolean
+}
+
+export interface BackupSnapshotInfo {
+  /** Snapshot name as stored, e.g. "2024-06-01T10-22-05Z.brainstorm". */
+  name: string
+  createdAt: number
+  sizeBytes: number
+  encrypted: boolean
+}
+
+export interface BackupStatus {
+  /** Whether the target is configured well enough to attempt a backup. */
+  configured: boolean
+  running: boolean
+  lastRunAt: number | null
+  lastError: string | null
+  lastSnapshot: string | null
+  /** True when the OS keychain is available, so the passphrase can be kept. */
+  passphrasePersisted: boolean
+}
+
+export interface BackupRunResult {
+  ok: boolean
+  message: string
+  /** Set on a successful write. */
+  snapshot?: BackupSnapshotInfo
+  /** Count of snapshots removed by retention pruning. */
+  pruned?: number
+}
+
+// What a snapshot holds, shown before the user commits to a restore.
+export interface BackupPreview {
+  ok: boolean
+  message: string
+  createdAt?: number
+  appVersion?: string
+  encrypted?: boolean
+  workspaces?: number
+  brainstorms?: number
+  ideas?: number
+  messages?: number
+}
+
+// The on-disk envelope. Contents are the StoreShape payload; everything else
+// is metadata that stays readable so a snapshot can be listed and dated
+// without a passphrase, and so a future version can migrate an old one.
+export interface BackupEnvelope {
+  format: 'brainstorm-backup'
+  version: 1
+  createdAt: number
+  appVersion: string
+  /** Present only when the payload is encrypted. */
+  encryption?: {
+    algorithm: 'aes-256-gcm'
+    kdf: 'scrypt'
+    salt: string
+    iv: string
+    authTag: string
+    N: number
+    r: number
+    p: number
+  }
+  /** JSON-encoded StoreShape. Absent when encrypted. */
+  data?: StoreShape
+  /** Base64 ciphertext of the JSON-encoded StoreShape. Present when encrypted. */
+  cipherText?: string
+}
+
+
 // --- ChatGPT webview bridge -------------------------------------------------
 
 export interface OutboundOpConfig {
@@ -137,10 +229,28 @@ export interface ExposedApi {
   copyToClipboard: (text: string) => Promise<void>
   /** Opens a native save dialog and writes `content`. Resolves true if saved. */
   exportFile: (defaultName: string, content: string) => Promise<boolean>
+  /** Opens a native open dialog and reads a file. Resolves null if cancelled. */
+  readFile: (extensions?: string[]) => Promise<BackupEnvelope | null>
   getPreloadPath: (scriptName: string) => Promise<string>
 
   storeGet: <K extends keyof StoreShape>(key: K) => Promise<StoreShape[K]>
   storeSet: <K extends keyof StoreShape>(key: K, value: StoreShape[K]) => Promise<void>
+
+  // --- backup ---
+  backupGetConfig: () => Promise<BackupConfig>
+  backupSetConfig: (config: BackupConfig) => Promise<BackupConfig>
+  /** Stores the WebDAV password in the OS keychain. Pass null to forget it. */
+  backupSetSecret: (password: string | null) => Promise<boolean>
+  /** True when the OS keychain is usable on this machine. */
+  backupSecretPersisted: () => Promise<boolean>
+  backupNow: () => Promise<BackupRunResult>
+  backupList: () => Promise<BackupSnapshotInfo[]>
+  backupInspect: (name: string, passphrase?: string) => Promise<BackupPreview>
+  /** Replaces local data. Pass keepLocal=true to merge instead of overwrite. */
+  backupRestore: (name: string, passphrase: string | null, keepLocal: boolean) => Promise<BackupRunResult>
+  backupTestConnection: () => Promise<{ ok: boolean; message: string }>
+  /** Fires whenever a backup finishes or the status changes. */
+  onBackupStatus: (cb: (status: BackupStatus) => void) => () => void
 
   /** Registers a menu-action listener. Returns a disposer — call it on unmount. */
   onMenuAction: (cb: (action: string) => void) => () => void

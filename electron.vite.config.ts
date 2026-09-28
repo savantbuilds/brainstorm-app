@@ -6,7 +6,14 @@ export default defineConfig({
   main: {
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/main/index.ts') }
+        input: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          // A side-effect-free entry for the backup subsystem. The main bundle
+          // already contains these modules; this one exists purely so the
+          // backup tests can import the real, compiled code instead of a copy.
+          'backup-under-test': resolve(__dirname, 'src/main/backup/entry.ts')
+        },
+        output: { entryFileNames: '[name].js' }
       }
     }
   },
