@@ -1,4 +1,4 @@
-import { randomBytes, scryptSync, createCipheriv, createDecipheriv, timingSafeEqual } from 'node:crypto'
+import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from 'node:crypto'
 import type { BackupEnvelope, StoreShape } from '@shared/types'
 
 // Snapshot encryption.
@@ -130,12 +130,4 @@ export function openSnapshot(envelope: BackupEnvelope, passphrase?: string | nul
   } catch {
     throw new SnapshotError('Backup decrypted but did not contain valid data.')
   }
-}
-
-/** Constant-time compare, for passphrase confirmation fields. */
-export function secretsMatch(a: string, b: string): boolean {
-  const bufA = Buffer.from(a.normalize('NFKC'))
-  const bufB = Buffer.from(b.normalize('NFKC'))
-  if (bufA.length !== bufB.length) return false
-  return timingSafeEqual(bufA, bufB)
 }

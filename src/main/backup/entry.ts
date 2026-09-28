@@ -5,7 +5,7 @@
 // and Electron runtime the app uses) rather than a hand-copied reimplementation
 // that could drift from what actually ships.
 
-export { openSnapshot, sealSnapshot, SnapshotError, secretsMatch } from './crypto'
+export { openSnapshot, sealSnapshot, SnapshotError } from './crypto'
 export {
   createTarget,
   describeSnapshot,
